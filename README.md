@@ -1,18 +1,8 @@
-# cnffurdl-order-api secure estimate status
+# cnffurdl-order-api
 
-견적 상태 관리 및 삭제 기능을 지원합니다.
+구매자명/옵션정보 추출을 보강한 버전입니다.
 
-## Estimate status
-
-- UNPAID: 미결제
-- PAID: 결제완료
-- CONFIRMED: 주문확인
-- SHIPPED: 발송완료
-
-## New endpoints
-
-- GET `/stored/estimates`
-- PATCH `/stored/estimates/:estimateId/status`
-- DELETE `/stored/estimates/:estimateId`
-
-Firebase ID Token required.
+- 옵션정보 우선 표시
+- 구매자명 필드 경로 보강
+- 배송 전/클레임 주문 조회
+- 견적 상태 관리/삭제

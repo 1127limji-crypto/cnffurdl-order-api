@@ -293,11 +293,107 @@ function getNested(obj, paths, fallback = "") {
   return fallback;
 }
 
+function firstNonEmpty(values, fallback = "") {
+  for (const value of values) {
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return String(value).trim();
+    }
+  }
+  return fallback;
+}
+
+function buildOptionInfo(row) {
+  const values = [
+    getNested(row, ["productOrder.optionInfo", "productOrderInfo.optionInfo", "productOrderResponseContent.optionInfo"]),
+    getNested(row, ["productOrder.optionName", "productOrderInfo.optionName", "productOrderResponseContent.optionName"]),
+    getNested(row, ["productOrder.optionValue", "productOrderInfo.optionValue", "productOrderResponseContent.optionValue"]),
+    getNested(row, ["productOrder.productOption", "productOrderInfo.productOption", "productOrderResponseContent.productOption"]),
+    getNested(row, ["productOrder.productOptionContents", "productOrderInfo.productOptionContents", "productOrderResponseContent.productOptionContents"]),
+    getNested(row, ["productOrder.optionManageCode", "productOrderInfo.optionManageCode", "productOrderResponseContent.optionManageCode"]),
+    getNested(row, ["productOrder.optionCode", "productOrderInfo.optionCode", "productOrderResponseContent.optionCode"]),
+    getNested(row, ["optionInfo", "optionName", "optionValue", "productOption", "productOptionContents", "optionManageCode", "optionCode"])
+  ];
+
+  return Array.from(new Set(values.map((v) => String(v || "").trim()).filter(Boolean))).join(" / ");
+}
+
+
+function getNaverStatusLabel(code, type = "product") {
+  const value = String(code || "").trim().toUpperCase();
+
+  const productStatusMap = {
+    PAYED: "신규주문/결제완료",
+    PRODUCT_PREPARE: "상품준비중",
+    DELIVERING: "배송중",
+    DELIVERED: "배송완료",
+    PURCHASE_DECIDED: "구매확정",
+    EXCHANGED: "교환",
+    CANCELED: "취소",
+    RETURNED: "반품",
+    CANCELED_BY_NOPAYMENT: "미입금취소"
+  };
+
+  const claimStatusMap = {
+    CANCEL_REQUEST: "취소요청",
+    CANCELING: "취소처리중",
+    CANCEL_DONE: "취소완료",
+    CANCEL_REJECT: "취소철회/거부",
+    RETURN_REQUEST: "반품요청",
+    RETURNING: "반품처리중",
+    RETURN_DONE: "반품완료",
+    RETURN_REJECT: "반품철회/거부",
+    EXCHANGE_REQUEST: "교환요청",
+    EXCHANGING: "교환처리중",
+    EXCHANGE_DONE: "교환완료",
+    EXCHANGE_REJECT: "교환철회/거부"
+  };
+
+  const deliveryStatusMap = {
+    DELIVERING: "배송중",
+    DELIVERED: "배송완료",
+    COLLECTING: "수거중",
+    COLLECTED: "수거완료"
+  };
+
+  const map = type === "claim" ? claimStatusMap : type === "delivery" ? deliveryStatusMap : productStatusMap;
+  return value ? (map[value] || value) : "";
+}
+
+function inferPlaceOrderLabel(row) {
+  const productStatus = String(row.productOrderStatus || row.status || "").toUpperCase();
+  const deliveryStatus = String(row.deliveryStatus || "").toUpperCase();
+  const claimStatus = String(row.claimStatus || "").toUpperCase();
+  const claimType = String(row.claimType || "").toUpperCase();
+
+  if (claimStatus || claimType) return "클레임";
+  if (["DELIVERING", "DELIVERED", "PURCHASE_DECIDED"].includes(productStatus) || ["DELIVERING", "DELIVERED"].includes(deliveryStatus)) return "발송 이후";
+  if (productStatus === "PAYED") return "신규주문(발주전)";
+  if (["PRODUCT_PREPARE", "DISPATCHED", "PLACE_PRODUCT_ORDER"].includes(productStatus)) return "신규주문(발주후)";
+  return productStatus ? "상태확인필요" : "";
+}
+
+function isBeforeShipmentOrClaim(order) {
+  const productStatus = String(order.productOrderStatus || order.status || "").toUpperCase();
+  const deliveryStatus = String(order.deliveryStatus || "").toUpperCase();
+  const claimStatus = String(order.claimStatus || "").toUpperCase();
+  const claimType = String(order.claimType || "").toUpperCase();
+
+  if (claimStatus || claimType) return true;
+
+  const shippedStatuses = new Set(["DELIVERING", "DELIVERED", "PURCHASE_DECIDED"]);
+  if (shippedStatuses.has(productStatus)) return false;
+  if (shippedStatuses.has(deliveryStatus)) return false;
+
+  return true;
+}
+
+
 function extractSimpleOrder(row) {
   const order = row.order || row.orderInfo || row.orderResponseContent || {};
   const productOrder = row.productOrder || row.productOrderInfo || row.productOrderResponseContent || {};
   const delivery = row.delivery || row.deliveryInfo || row.deliveryResponseContent || {};
   const shippingAddress = row.shippingAddress || row.shippingAddressInfo || row.shippingAddressResponseContent || {};
+  const claim = row.claim || row.claimInfo || row.claimResponseContent || {};
 
   const productOrderId = getNested(row, [
     "productOrderId",
@@ -326,18 +422,46 @@ function extractSimpleOrder(row) {
     "productName"
   ]);
 
-  const optionCode = getNested(row, [
+  const optionInfo = buildOptionInfo(row);
+  const optionCode = optionInfo || getNested(row, [
     "productOrder.optionCode",
     "productOrderInfo.optionCode",
     "productOrderResponseContent.optionCode",
     "optionCode"
   ]);
 
-  const status = getNested(row, [
+  const productOrderStatus = getNested(row, [
     "productOrder.productOrderStatus",
     "productOrderInfo.productOrderStatus",
     "productOrderResponseContent.productOrderStatus",
     "productOrderStatus"
+  ]);
+
+  const claimStatus = getNested(row, [
+    "claim.claimStatus",
+    "claimInfo.claimStatus",
+    "claimResponseContent.claimStatus",
+    "productOrder.claimStatus",
+    "productOrderInfo.claimStatus",
+    "claimStatus"
+  ]);
+
+  const claimType = getNested(row, [
+    "claim.claimType",
+    "claimInfo.claimType",
+    "claimResponseContent.claimType",
+    "productOrder.claimType",
+    "productOrderInfo.claimType",
+    "claimType"
+  ]);
+
+  const deliveryStatus = getNested(row, [
+    "delivery.deliveryStatus",
+    "deliveryInfo.deliveryStatus",
+    "deliveryResponseContent.deliveryStatus",
+    "productOrder.deliveryStatus",
+    "productOrderInfo.deliveryStatus",
+    "deliveryStatus"
   ]);
 
   const quantity = getNested(row, [
@@ -361,19 +485,51 @@ function extractSimpleOrder(row) {
     "paymentAmount"
   ], 0)) || 0;
 
-  return {
+  const simple = {
     productOrderId,
     orderId,
     orderNo,
     orderDate: getNested(row, ["order.orderDate", "orderInfo.orderDate", "orderDate"]),
     paymentDate: getNested(row, ["order.paymentDate", "orderInfo.paymentDate", "paymentDate"]),
-    orderName: getNested(row, ["order.orderName", "orderInfo.orderName", "orderName"]),
+    buyerName: firstNonEmpty([
+      getNested(row, ["order.ordererName", "orderInfo.ordererName"]),
+      getNested(row, ["order.orderName", "orderInfo.orderName"]),
+      getNested(row, ["order.purchaserName", "orderInfo.purchaserName"]),
+      getNested(row, ["order.buyerName", "orderInfo.buyerName"]),
+      getNested(row, ["productOrder.ordererName", "productOrderInfo.ordererName"]),
+      getNested(row, ["productOrder.purchaserName", "productOrderInfo.purchaserName"]),
+      getNested(row, ["buyerName", "ordererName", "purchaserName", "orderName"])
+    ]),
+    orderName: firstNonEmpty([
+      getNested(row, ["order.ordererName", "orderInfo.ordererName"]),
+      getNested(row, ["order.orderName", "orderInfo.orderName"]),
+      getNested(row, ["order.purchaserName", "orderInfo.purchaserName"]),
+      getNested(row, ["order.buyerName", "orderInfo.buyerName"]),
+      getNested(row, ["productOrder.ordererName", "productOrderInfo.ordererName"]),
+      getNested(row, ["productOrder.purchaserName", "productOrderInfo.purchaserName"]),
+      getNested(row, ["buyerName", "ordererName", "purchaserName", "orderName"])
+    ]),
     orderTel: getNested(row, ["order.orderTel", "orderInfo.orderTel", "orderTel"]),
     productName,
+    optionInfo,
     optionCode,
     quantity,
     amount,
-    status,
+
+    productOrderStatus,
+    productOrderStatusLabel: getNaverStatusLabel(productOrderStatus, "product"),
+    status: productOrderStatus,
+    statusLabel: getNaverStatusLabel(productOrderStatus, "product"),
+
+    claimStatus,
+    claimStatusLabel: getNaverStatusLabel(claimStatus, "claim"),
+    claimType,
+
+    deliveryStatus,
+    deliveryStatusLabel: getNaverStatusLabel(deliveryStatus, "delivery"),
+
+    placeOrderLabel: "",
+
     deliveryCompany: getNested(row, ["delivery.deliveryCompany", "deliveryInfo.deliveryCompany", "productOrder.expectedDeliveryCompany", "productOrderInfo.expectedDeliveryCompany"]),
     shippingMemo: getNested(row, ["productOrder.shippingMemo", "productOrderInfo.shippingMemo", "shippingMemo"]),
     receiverName: getNested(row, ["shippingAddress.name", "shippingAddressInfo.name", "receiverName"]),
@@ -384,95 +540,11 @@ function extractSimpleOrder(row) {
     detailedAddress: getNested(row, ["shippingAddress.detailedAddress", "shippingAddressInfo.detailedAddress", "detailedAddress"]),
     raw: row
   };
+
+  simple.placeOrderLabel = inferPlaceOrderLabel(simple);
+
+  return simple;
 }
-
-
-async function fetchDetailedOrdersByCondition({
-  from,
-  to,
-  rangeType = "PAYED_DATETIME",
-  productOrderStatuses = "PAYED",
-  page = "1",
-  size = "300",
-  type,
-  accountId
-}) {
-  const params = new URLSearchParams();
-  params.append("from", from);
-  params.append("to", to);
-  params.append("rangeType", rangeType);
-  params.append("page", page);
-  params.append("size", size);
-
-  if (productOrderStatuses) {
-    params.append("productOrderStatuses", productOrderStatuses);
-  }
-
-  const result = await naverApiFetch(`/v1/pay-order/seller/product-orders?${params.toString()}`, {
-    method: "GET",
-    type,
-    accountId
-  });
-
-  const contents = getContentsFromNaverResponse(result.data);
-  const productOrderIds = getProductOrderIdsFromRows(contents);
-
-  let detailRows = contents;
-  let detailFetchUsed = false;
-
-  if (productOrderIds.length && (!contents.length || !contents.some(hasOrderDetail))) {
-    detailRows = await getProductOrderDetailsByIds(productOrderIds, {
-      type,
-      accountId
-    });
-    detailFetchUsed = true;
-  }
-
-  return {
-    query: { from, to, rangeType, productOrderStatuses, page, size },
-    productOrderIds,
-    detailFetchUsed,
-    rows: detailRows,
-    raw: detailFetchUsed ? { firstQuery: result.data, detailRows } : result.data
-  };
-}
-
-function parseYmdToDate(ymd) {
-  const match = String(ymd || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return null;
-  const yyyy = Number(match[1]);
-  const mm = Number(match[2]);
-  const dd = Number(match[3]);
-  return new Date(Date.UTC(yyyy, mm - 1, dd, 0, 0, 0, 0));
-}
-
-function getKstYmd(date) {
-  const kst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
-  return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, "0")}-${String(kst.getUTCDate()).padStart(2, "0")}`;
-}
-
-function ymdToKstDateTime(ymd, endOfDay = false) {
-  return `${ymd}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}+09:00`;
-}
-
-function addDaysUtc(date, days) {
-  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
-}
-
-function getDateRangeList(startYmd, endYmd) {
-  const start = parseYmdToDate(startYmd);
-  const end = parseYmdToDate(endYmd);
-  if (!start || !end || start > end) return [];
-
-  const list = [];
-  let current = start;
-  while (current <= end) {
-    list.push(getKstYmd(current));
-    current = addDaysUtc(current, 1);
-  }
-  return list;
-}
-
 
 function removeUndefinedDeep(value) {
   if (Array.isArray(value)) {
@@ -754,7 +826,7 @@ app.get("/naver/orders", requireFirebaseAdmin, async (req, res) => {
     const from = req.query.from ? String(req.query.from) : defaultRange.from;
     const to = req.query.to ? String(req.query.to) : defaultRange.to;
     const rangeType = req.query.rangeType ? String(req.query.rangeType) : "PAYED_DATETIME";
-    const productOrderStatuses = req.query.productOrderStatuses !== undefined ? String(req.query.productOrderStatuses) : "PAYED";
+    const productOrderStatuses = req.query.productOrderStatuses !== undefined ? String(req.query.productOrderStatuses) : "";
     const page = req.query.page ? String(req.query.page) : "1";
     const size = req.query.size ? String(req.query.size) : "100";
 
@@ -799,7 +871,7 @@ app.get("/naver/orders", requireFirebaseAdmin, async (req, res) => {
       detailFetchUsed = true;
     }
 
-    const simpleOrders = detailRows.map(extractSimpleOrder);
+    const simpleOrders = detailRows.map(extractSimpleOrder).filter(isBeforeShipmentOrClaim);
     const savedCount = await saveNaverOrdersToFirestore(simpleOrders, "naver-orders");
 
     res.json({
@@ -874,14 +946,14 @@ app.get("/naver/unshipped-orders", requireFirebaseAdmin, async (req, res) => {
         from,
         to,
         rangeType: "PAYED_DATETIME",
-        productOrderStatuses: "PAYED",
+        productOrderStatuses: "",
         page: "1",
         size: "300",
         type,
         accountId
       });
 
-      const simpleOrders = result.rows.map(extractSimpleOrder);
+      const simpleOrders = result.rows.map(extractSimpleOrder).filter(isBeforeShipmentOrClaim);
 
       allRows.push(...simpleOrders);
 
@@ -904,13 +976,13 @@ app.get("/naver/unshipped-orders", requireFirebaseAdmin, async (req, res) => {
 
     res.json({
       ok: true,
-      message: "네이버 스마트스토어 미발송/결제완료 주문 전체 조회 성공",
+      message: "네이버 스마트스토어 배송 전/클레임 주문 조회 성공",
       admin: req.adminUser.email,
       query: {
         startDate: startYmd,
         endDate: endYmd,
         days: dateList.length,
-        productOrderStatuses: "PAYED",
+        productOrderStatuses: "",
         rangeType: "PAYED_DATETIME"
       },
       count: orders.length,
