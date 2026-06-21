@@ -473,6 +473,180 @@ function getDateRangeList(startYmd, endYmd) {
   return list;
 }
 
+
+function removeUndefinedDeep(value) {
+  if (Array.isArray(value)) {
+    return value.map(removeUndefinedDeep);
+  }
+
+  if (value && typeof value === "object") {
+    const cleaned = {};
+    for (const [key, val] of Object.entries(value)) {
+      if (val !== undefined) {
+        cleaned[key] = removeUndefinedDeep(val);
+      }
+    }
+    return cleaned;
+  }
+
+  return value;
+}
+
+function dateOnlyFromDateTime(value) {
+  if (!value) return "";
+  return String(value).slice(0, 10);
+}
+
+async function saveNaverOrdersToFirestore(orders, source = "manual") {
+  initFirebaseAdmin();
+
+  if (!orders || !orders.length) {
+    return 0;
+  }
+
+  const db = admin.firestore();
+  const collection = db.collection("naverOrders");
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  let savedCount = 0;
+  let batch = db.batch();
+  let batchCount = 0;
+
+  for (const order of orders) {
+    const productOrderId = order.productOrderId || "";
+    if (!productOrderId) continue;
+
+    const docRef = collection.doc(String(productOrderId));
+    const payload = removeUndefinedDeep({
+      ...order,
+      paymentDateYmd: dateOnlyFromDateTime(order.paymentDate),
+      orderDateYmd: dateOnlyFromDateTime(order.orderDate),
+      source,
+      lastSyncedAt: now
+    });
+
+    batch.set(docRef, payload, { merge: true });
+    savedCount++;
+    batchCount++;
+
+    if (batchCount >= 400) {
+      await batch.commit();
+      batch = db.batch();
+      batchCount = 0;
+    }
+  }
+
+  if (batchCount > 0) {
+    await batch.commit();
+  }
+
+  return savedCount;
+}
+
+function filterStoredOrders(orders, { startDate, endDate, keyword }) {
+  const kw = String(keyword || "").trim().toLowerCase();
+
+  return orders.filter((order) => {
+    const date = order.paymentDateYmd || order.orderDateYmd || "";
+    const dateMatched =
+      (!startDate || (date && date >= startDate)) &&
+      (!endDate || (date && date <= endDate));
+
+    const joined = [
+      order.productOrderId,
+      order.orderNo,
+      order.orderId,
+      order.orderName,
+      order.receiverName,
+      order.productName,
+      order.optionCode,
+      order.status,
+      order.shippingMemo
+    ].join(" ").toLowerCase();
+
+    const keywordMatched = !kw || joined.includes(kw);
+
+    return dateMatched && keywordMatched;
+  });
+}
+
+
+
+const ESTIMATE_STATUS_LABELS = {
+  UNPAID: "미결제",
+  PAID: "결제완료",
+  CONFIRMED: "주문확인",
+  SHIPPED: "발송완료"
+};
+
+function normalizeEstimateStatus(status) {
+  const value = String(status || "UNPAID").trim().toUpperCase();
+  return ESTIMATE_STATUS_LABELS[value] ? value : "UNPAID";
+}
+
+function getEstimateStatusLabel(status) {
+  return ESTIMATE_STATUS_LABELS[normalizeEstimateStatus(status)];
+}
+
+function serializeFirestoreValue(value) {
+  if (value && typeof value.toDate === "function") {
+    return value.toDate().toISOString();
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(serializeFirestoreValue);
+  }
+
+  if (value && typeof value === "object") {
+    const obj = {};
+    for (const [key, val] of Object.entries(value)) {
+      obj[key] = serializeFirestoreValue(val);
+    }
+    return obj;
+  }
+
+  return value;
+}
+
+function estimateDateOnly(row) {
+  if (row.createdAtLocal) return String(row.createdAtLocal).slice(0, 10);
+  if (row.createdAt && typeof row.createdAt === "string") return row.createdAt.slice(0, 10);
+  if (row.createdAtIso) return String(row.createdAtIso).slice(0, 10);
+  return "";
+}
+
+function filterEstimates(rows, { startDate, endDate, keyword, status }) {
+  const kw = String(keyword || "").trim().toLowerCase();
+  const normalizedStatus = status ? normalizeEstimateStatus(status) : "";
+
+  return rows.filter((row) => {
+    const date = estimateDateOnly(row);
+    const dateMatched =
+      (!startDate || (date && date >= startDate)) &&
+      (!endDate || (date && date <= endDate));
+
+    const rowStatus = normalizeEstimateStatus(row.orderStatus || row.status);
+
+    const statusMatched = !normalizedStatus || rowStatus === normalizedStatus;
+
+    const joined = [
+      row.estimateNo,
+      row.customerName,
+      row.paperName,
+      row.coatingText,
+      row.foilText,
+      row.pdfFileName,
+      rowStatus,
+      getEstimateStatusLabel(rowStatus)
+    ].join(" ").toLowerCase();
+
+    const keywordMatched = !kw || joined.includes(kw);
+
+    return dateMatched && statusMatched && keywordMatched;
+  });
+}
+
+
 app.get("/", (req, res) => {
   res.json({
     ok: true,
@@ -485,6 +659,11 @@ app.get("/", (req, res) => {
       "/naver/env-check",
       "/naver/token-test",
       "/naver/orders",
+      "/naver/unshipped-orders",
+      "/stored/naver-orders",
+      "/stored/estimates",
+      "/stored/estimates/:estimateId/status",
+      "/stored/estimates/:estimateId",
       "/naver/confirm-order"
     ]
   });
@@ -621,6 +800,7 @@ app.get("/naver/orders", requireFirebaseAdmin, async (req, res) => {
     }
 
     const simpleOrders = detailRows.map(extractSimpleOrder);
+    const savedCount = await saveNaverOrdersToFirestore(simpleOrders, "naver-orders");
 
     res.json({
       ok: true,
@@ -635,6 +815,7 @@ app.get("/naver/orders", requireFirebaseAdmin, async (req, res) => {
         size
       },
       count: simpleOrders.length,
+      savedCount,
       detailFetchUsed,
       productOrderIds,
       orders: simpleOrders,
@@ -719,6 +900,7 @@ app.get("/naver/unshipped-orders", requireFirebaseAdmin, async (req, res) => {
     }
 
     const orders = Array.from(uniqueMap.values());
+    const savedCount = await saveNaverOrdersToFirestore(orders, "naver-unshipped-orders");
 
     res.json({
       ok: true,
@@ -732,8 +914,189 @@ app.get("/naver/unshipped-orders", requireFirebaseAdmin, async (req, res) => {
         rangeType: "PAYED_DATETIME"
       },
       count: orders.length,
+      savedCount,
       orders,
       dayResults
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({
+      ok: false,
+      message: error.message,
+      status: error.status || 500,
+      detail: error.data || null
+    });
+  }
+});
+
+
+
+
+app.get("/stored/estimates", requireFirebaseAdmin, async (req, res) => {
+  try {
+    initFirebaseAdmin();
+
+    const startDate = req.query.startDate ? String(req.query.startDate) : "";
+    const endDate = req.query.endDate ? String(req.query.endDate) : "";
+    const keyword = req.query.keyword ? String(req.query.keyword) : "";
+    const status = req.query.status ? String(req.query.status) : "";
+    const limit = Math.max(1, Math.min(2000, Number(req.query.limit) || 1000));
+
+    const snapshot = await admin.firestore()
+      .collection("estimates")
+      .orderBy("createdAt", "desc")
+      .limit(limit)
+      .get();
+
+    const rows = snapshot.docs.map((doc) => {
+      const data = serializeFirestoreValue(doc.data());
+      const orderStatus = normalizeEstimateStatus(data.orderStatus || data.status);
+      return {
+        id: doc.id,
+        ...data,
+        orderStatus,
+        orderStatusLabel: getEstimateStatusLabel(orderStatus)
+      };
+    });
+
+    const filtered = filterEstimates(rows, { startDate, endDate, keyword, status });
+
+    res.json({
+      ok: true,
+      message: "견적 목록 조회 성공",
+      admin: req.adminUser.email,
+      query: {
+        startDate,
+        endDate,
+        keyword,
+        status,
+        limit
+      },
+      count: filtered.length,
+      estimates: filtered
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({
+      ok: false,
+      message: error.message,
+      status: error.status || 500,
+      detail: error.data || null
+    });
+  }
+});
+
+app.patch("/stored/estimates/:estimateId/status", requireFirebaseAdmin, async (req, res) => {
+  try {
+    initFirebaseAdmin();
+
+    const estimateId = String(req.params.estimateId || "").trim();
+    const orderStatus = normalizeEstimateStatus(req.body.orderStatus || req.body.status);
+
+    if (!estimateId) {
+      return res.status(400).json({
+        ok: false,
+        message: "estimateId가 필요합니다."
+      });
+    }
+
+    await admin.firestore()
+      .collection("estimates")
+      .doc(estimateId)
+      .set({
+        orderStatus,
+        orderStatusLabel: getEstimateStatusLabel(orderStatus),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedBy: req.adminUser.email
+      }, { merge: true });
+
+    res.json({
+      ok: true,
+      message: "견적 상태 변경 완료",
+      estimateId,
+      orderStatus,
+      orderStatusLabel: getEstimateStatusLabel(orderStatus)
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({
+      ok: false,
+      message: error.message,
+      status: error.status || 500,
+      detail: error.data || null
+    });
+  }
+});
+
+app.delete("/stored/estimates/:estimateId", requireFirebaseAdmin, async (req, res) => {
+  try {
+    initFirebaseAdmin();
+
+    const estimateId = String(req.params.estimateId || "").trim();
+
+    if (!estimateId) {
+      return res.status(400).json({
+        ok: false,
+        message: "estimateId가 필요합니다."
+      });
+    }
+
+    await admin.firestore()
+      .collection("estimates")
+      .doc(estimateId)
+      .delete();
+
+    res.json({
+      ok: true,
+      message: "견적 삭제 완료",
+      estimateId
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({
+      ok: false,
+      message: error.message,
+      status: error.status || 500,
+      detail: error.data || null
+    });
+  }
+});
+
+
+app.get("/stored/naver-orders", requireFirebaseAdmin, async (req, res) => {
+  try {
+    initFirebaseAdmin();
+
+    const startDate = req.query.startDate ? String(req.query.startDate) : "";
+    const endDate = req.query.endDate ? String(req.query.endDate) : "";
+    const keyword = req.query.keyword ? String(req.query.keyword) : "";
+    const limit = Math.max(1, Math.min(2000, Number(req.query.limit) || 1000));
+
+    const snapshot = await admin.firestore()
+      .collection("naverOrders")
+      .orderBy("lastSyncedAt", "desc")
+      .limit(limit)
+      .get();
+
+    const orders = snapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    const filteredOrders = filterStoredOrders(orders, {
+      startDate,
+      endDate,
+      keyword
+    });
+
+    res.json({
+      ok: true,
+      message: "저장된 네이버 주문 조회 성공",
+      admin: req.adminUser.email,
+      query: {
+        startDate,
+        endDate,
+        keyword,
+        limit
+      },
+      count: filteredOrders.length,
+      orders: filteredOrders
     });
   } catch (error) {
     res.status(error.status || 500).json({

@@ -1,13 +1,18 @@
-# cnffurdl-order-api secure unshipped
+# cnffurdl-order-api secure estimate status
 
-미발송/결제완료 주문 전체 조회를 지원합니다.
+견적 상태 관리 및 삭제 기능을 지원합니다.
 
-## Endpoint
+## Estimate status
 
-`/naver/unshipped-orders?days=180`
+- UNPAID: 미결제
+- PAID: 결제완료
+- CONFIRMED: 주문확인
+- SHIPPED: 발송완료
 
-또는
+## New endpoints
 
-`/naver/unshipped-orders?startDate=2026-01-01&endDate=2026-06-21`
+- GET `/stored/estimates`
+- PATCH `/stored/estimates/:estimateId/status`
+- DELETE `/stored/estimates/:estimateId`
 
-관리자 Firebase ID Token이 필요합니다.
+Firebase ID Token required.

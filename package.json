@@ -1,7 +1,7 @@
 {
   "name": "cnffurdl-order-api",
-  "version": "2.2.0",
-  "description": "출력이 스마트스토어 주문 연동 API 서버 - unshipped all orders",
+  "version": "2.4.0",
+  "description": "출력이 스마트스토어 주문 및 견적 상태 관리 API 서버",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
