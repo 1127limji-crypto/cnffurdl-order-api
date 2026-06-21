@@ -1,7 +1,7 @@
 {
   "name": "cnffurdl-order-api",
-  "version": "1.2.0",
-  "description": "출력이 스마트스토어 주문 연동 API 서버",
+  "version": "2.0.0",
+  "description": "출력이 스마트스토어 주문 연동 API 서버 - Firebase Admin Auth protected",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -9,7 +9,8 @@
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
-    "express": "^4.18.3"
+    "express": "^4.18.3",
+    "firebase-admin": "^12.7.0"
   },
   "engines": {
     "node": ">=18"
