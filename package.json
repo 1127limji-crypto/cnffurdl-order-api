@@ -1,6 +1,6 @@
 {
   "name": "cnffurdl-order-api",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "출력이 스마트스토어 주문 연동 API 서버",
   "main": "server.js",
   "scripts": {
