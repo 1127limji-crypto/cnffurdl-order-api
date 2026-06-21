@@ -1,24 +1,13 @@
-# cnffurdl-order-api secure
+# cnffurdl-order-api secure unshipped
 
-Firebase Admin SDK로 관리자 Google 로그인 토큰을 검증한 뒤 네이버 주문 API를 호출합니다.
+미발송/결제완료 주문 전체 조회를 지원합니다.
 
-## Required Cloudtype Environment Variables
+## Endpoint
 
-```text
-NAVER_COMMERCE_CLIENT_ID=
-NAVER_COMMERCE_CLIENT_SECRET=
+`/naver/unshipped-orders?days=180`
 
-FIREBASE_PROJECT_ID=
-FIREBASE_CLIENT_EMAIL=
-FIREBASE_PRIVATE_KEY=
+또는
 
-ADMIN_EMAILS=1127limji@gmail.com,cont834@gmail.com
-```
+`/naver/unshipped-orders?startDate=2026-01-01&endDate=2026-06-21`
 
-## Test
-
-```text
-/naver/env-check
-```
-
-`/naver/orders`, `/naver/token-test`, `/naver/confirm-order`는 Firebase ID Token이 필요합니다.
+관리자 Firebase ID Token이 필요합니다.

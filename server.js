@@ -144,6 +144,54 @@ function getContentsFromNaverResponse(data) {
   return [];
 }
 
+function getProductOrderIdsFromRows(rows) {
+  const ids = [];
+
+  for (const row of rows || []) {
+    const productOrderId =
+      row.productOrderId ||
+      (row.productOrder && row.productOrder.productOrderId) ||
+      (row.productOrderInfo && row.productOrderInfo.productOrderId) ||
+      (row.productOrderInfo && row.productOrderInfo.productOrder && row.productOrderInfo.productOrder.productOrderId);
+
+    if (productOrderId) ids.push(String(productOrderId));
+  }
+
+  return Array.from(new Set(ids));
+}
+
+function hasOrderDetail(row) {
+  if (!row) return false;
+  return Boolean(
+    row.order ||
+    row.productOrder ||
+    row.delivery ||
+    row.shippingAddress ||
+    row.productOrderInfo ||
+    row.orderInfo
+  );
+}
+
+async function getProductOrderDetailsByIds(productOrderIds, options = {}) {
+  const cleanIds = Array.from(new Set((productOrderIds || []).map((id) => String(id).trim()).filter(Boolean)));
+
+  if (!cleanIds.length) {
+    return [];
+  }
+
+  const result = await naverApiFetch("/v1/pay-order/seller/product-orders/query", {
+    method: "POST",
+    body: {
+      productOrderIds: cleanIds,
+      quantityClaimCompatibility: true
+    },
+    type: options.type,
+    accountId: options.accountId
+  });
+
+  return getContentsFromNaverResponse(result.data);
+}
+
 async function getNaverAccessToken(options = {}) {
   const clientId = requireEnv("NAVER_COMMERCE_CLIENT_ID");
   const clientSecret = requireEnv("NAVER_COMMERCE_CLIENT_SECRET");
@@ -237,43 +285,192 @@ async function naverApiFetch(path, options = {}) {
   };
 }
 
+function getNested(obj, paths, fallback = "") {
+  for (const path of paths) {
+    const value = path.split(".").reduce((acc, key) => acc && acc[key] !== undefined ? acc[key] : undefined, obj);
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return fallback;
+}
+
 function extractSimpleOrder(row) {
-  const order = row.order || {};
-  const productOrder = row.productOrder || {};
-  const delivery = row.delivery || {};
-  const shippingAddress = row.shippingAddress || {};
-  const productOrderId = row.productOrderId || productOrder.productOrderId || "";
-  const orderId = order.orderId || productOrder.orderId || "";
-  const orderNo = order.orderNo || "";
-  const productName = productOrder.productName || "";
-  const optionCode = productOrder.optionCode || "";
-  const status = productOrder.productOrderStatus || row.productOrderStatus || "";
-  const quantity = productOrder.quantity || productOrder.initialQuantity || "";
-  const amount = productOrder.totalProductAmount || productOrder.initialPaymentAmount || productOrder.remainPaymentAmount || 0;
+  const order = row.order || row.orderInfo || row.orderResponseContent || {};
+  const productOrder = row.productOrder || row.productOrderInfo || row.productOrderResponseContent || {};
+  const delivery = row.delivery || row.deliveryInfo || row.deliveryResponseContent || {};
+  const shippingAddress = row.shippingAddress || row.shippingAddressInfo || row.shippingAddressResponseContent || {};
+
+  const productOrderId = getNested(row, [
+    "productOrderId",
+    "productOrder.productOrderId",
+    "productOrderInfo.productOrderId",
+    "productOrderResponseContent.productOrderId"
+  ]);
+
+  const orderId = getNested(row, [
+    "order.orderId",
+    "orderInfo.orderId",
+    "productOrder.orderId",
+    "productOrderInfo.orderId"
+  ]);
+
+  const orderNo = getNested(row, [
+    "order.orderNo",
+    "orderInfo.orderNo",
+    "orderNo"
+  ]);
+
+  const productName = getNested(row, [
+    "productOrder.productName",
+    "productOrderInfo.productName",
+    "productOrderResponseContent.productName",
+    "productName"
+  ]);
+
+  const optionCode = getNested(row, [
+    "productOrder.optionCode",
+    "productOrderInfo.optionCode",
+    "productOrderResponseContent.optionCode",
+    "optionCode"
+  ]);
+
+  const status = getNested(row, [
+    "productOrder.productOrderStatus",
+    "productOrderInfo.productOrderStatus",
+    "productOrderResponseContent.productOrderStatus",
+    "productOrderStatus"
+  ]);
+
+  const quantity = getNested(row, [
+    "productOrder.quantity",
+    "productOrder.initialQuantity",
+    "productOrder.remainQuantity",
+    "productOrderInfo.quantity",
+    "productOrderInfo.initialQuantity",
+    "productOrderInfo.remainQuantity",
+    "quantity"
+  ]);
+
+  const amount = Number(getNested(row, [
+    "productOrder.totalProductAmount",
+    "productOrder.initialPaymentAmount",
+    "productOrder.remainPaymentAmount",
+    "productOrderInfo.totalProductAmount",
+    "productOrderInfo.initialPaymentAmount",
+    "productOrderInfo.remainPaymentAmount",
+    "totalProductAmount",
+    "paymentAmount"
+  ], 0)) || 0;
 
   return {
     productOrderId,
     orderId,
     orderNo,
-    orderDate: order.orderDate || "",
-    paymentDate: order.paymentDate || "",
-    orderName: order.orderName || "",
-    orderTel: order.orderTel || "",
+    orderDate: getNested(row, ["order.orderDate", "orderInfo.orderDate", "orderDate"]),
+    paymentDate: getNested(row, ["order.paymentDate", "orderInfo.paymentDate", "paymentDate"]),
+    orderName: getNested(row, ["order.orderName", "orderInfo.orderName", "orderName"]),
+    orderTel: getNested(row, ["order.orderTel", "orderInfo.orderTel", "orderTel"]),
     productName,
     optionCode,
     quantity,
     amount,
     status,
-    deliveryCompany: delivery.deliveryCompany || productOrder.expectedDeliveryCompany || "",
-    shippingMemo: productOrder.shippingMemo || "",
-    receiverName: shippingAddress.name || "",
-    receiverTel1: shippingAddress.tel1 || "",
-    receiverTel2: shippingAddress.tel2 || "",
-    zipCode: shippingAddress.zipCode || "",
-    baseAddress: shippingAddress.baseAddress || "",
-    detailedAddress: shippingAddress.detailedAddress || "",
+    deliveryCompany: getNested(row, ["delivery.deliveryCompany", "deliveryInfo.deliveryCompany", "productOrder.expectedDeliveryCompany", "productOrderInfo.expectedDeliveryCompany"]),
+    shippingMemo: getNested(row, ["productOrder.shippingMemo", "productOrderInfo.shippingMemo", "shippingMemo"]),
+    receiverName: getNested(row, ["shippingAddress.name", "shippingAddressInfo.name", "receiverName"]),
+    receiverTel1: getNested(row, ["shippingAddress.tel1", "shippingAddressInfo.tel1", "receiverTel1"]),
+    receiverTel2: getNested(row, ["shippingAddress.tel2", "shippingAddressInfo.tel2", "receiverTel2"]),
+    zipCode: getNested(row, ["shippingAddress.zipCode", "shippingAddressInfo.zipCode", "zipCode"]),
+    baseAddress: getNested(row, ["shippingAddress.baseAddress", "shippingAddressInfo.baseAddress", "baseAddress"]),
+    detailedAddress: getNested(row, ["shippingAddress.detailedAddress", "shippingAddressInfo.detailedAddress", "detailedAddress"]),
     raw: row
   };
+}
+
+
+async function fetchDetailedOrdersByCondition({
+  from,
+  to,
+  rangeType = "PAYED_DATETIME",
+  productOrderStatuses = "PAYED",
+  page = "1",
+  size = "300",
+  type,
+  accountId
+}) {
+  const params = new URLSearchParams();
+  params.append("from", from);
+  params.append("to", to);
+  params.append("rangeType", rangeType);
+  params.append("page", page);
+  params.append("size", size);
+
+  if (productOrderStatuses) {
+    params.append("productOrderStatuses", productOrderStatuses);
+  }
+
+  const result = await naverApiFetch(`/v1/pay-order/seller/product-orders?${params.toString()}`, {
+    method: "GET",
+    type,
+    accountId
+  });
+
+  const contents = getContentsFromNaverResponse(result.data);
+  const productOrderIds = getProductOrderIdsFromRows(contents);
+
+  let detailRows = contents;
+  let detailFetchUsed = false;
+
+  if (productOrderIds.length && (!contents.length || !contents.some(hasOrderDetail))) {
+    detailRows = await getProductOrderDetailsByIds(productOrderIds, {
+      type,
+      accountId
+    });
+    detailFetchUsed = true;
+  }
+
+  return {
+    query: { from, to, rangeType, productOrderStatuses, page, size },
+    productOrderIds,
+    detailFetchUsed,
+    rows: detailRows,
+    raw: detailFetchUsed ? { firstQuery: result.data, detailRows } : result.data
+  };
+}
+
+function parseYmdToDate(ymd) {
+  const match = String(ymd || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const yyyy = Number(match[1]);
+  const mm = Number(match[2]);
+  const dd = Number(match[3]);
+  return new Date(Date.UTC(yyyy, mm - 1, dd, 0, 0, 0, 0));
+}
+
+function getKstYmd(date) {
+  const kst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
+  return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, "0")}-${String(kst.getUTCDate()).padStart(2, "0")}`;
+}
+
+function ymdToKstDateTime(ymd, endOfDay = false) {
+  return `${ymd}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}+09:00`;
+}
+
+function addDaysUtc(date, days) {
+  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+function getDateRangeList(startYmd, endYmd) {
+  const start = parseYmdToDate(startYmd);
+  const end = parseYmdToDate(endYmd);
+  if (!start || !end || start > end) return [];
+
+  const list = [];
+  let current = start;
+  while (current <= end) {
+    list.push(getKstYmd(current));
+    current = addDaysUtc(current, 1);
+  }
+  return list;
 }
 
 app.get("/", (req, res) => {
@@ -408,7 +605,22 @@ app.get("/naver/orders", requireFirebaseAdmin, async (req, res) => {
     });
 
     const contents = getContentsFromNaverResponse(result.data);
-    const simpleOrders = contents.map(extractSimpleOrder);
+    const productOrderIds = getProductOrderIdsFromRows(contents);
+
+    let detailRows = contents;
+    let detailFetchUsed = false;
+
+    // 조건형 조회 결과가 상품주문번호 위주로만 내려오는 경우,
+    // 상품주문번호를 이용해 상세조회 API를 한 번 더 호출합니다.
+    if (productOrderIds.length && (!contents.length || !contents.some(hasOrderDetail))) {
+      detailRows = await getProductOrderDetailsByIds(productOrderIds, {
+        type: req.query.type ? String(req.query.type) : undefined,
+        accountId: req.query.account_id ? String(req.query.account_id) : undefined
+      });
+      detailFetchUsed = true;
+    }
+
+    const simpleOrders = detailRows.map(extractSimpleOrder);
 
     res.json({
       ok: true,
@@ -423,8 +635,10 @@ app.get("/naver/orders", requireFirebaseAdmin, async (req, res) => {
         size
       },
       count: simpleOrders.length,
+      detailFetchUsed,
+      productOrderIds,
       orders: simpleOrders,
-      raw: result.data
+      raw: detailFetchUsed ? { firstQuery: result.data, detailRows } : result.data
     });
   } catch (error) {
     res.status(error.status || 500).json({
@@ -435,6 +649,102 @@ app.get("/naver/orders", requireFirebaseAdmin, async (req, res) => {
     });
   }
 });
+
+
+app.get("/naver/unshipped-orders", requireFirebaseAdmin, async (req, res) => {
+  try {
+    const todayYmd = getKstYmd(new Date());
+
+    const requestedDays = Math.max(1, Math.min(180, Number(req.query.days) || 180));
+    const endYmd = req.query.endDate ? String(req.query.endDate) : todayYmd;
+
+    let startYmd = req.query.startDate ? String(req.query.startDate) : null;
+    if (!startYmd) {
+      const endDate = parseYmdToDate(endYmd) || parseYmdToDate(todayYmd);
+      startYmd = getKstYmd(addDaysUtc(endDate, -(requestedDays - 1)));
+    }
+
+    const dateList = getDateRangeList(startYmd, endYmd);
+
+    if (!dateList.length) {
+      return res.status(400).json({
+        ok: false,
+        message: "조회 기간이 올바르지 않습니다. startDate/endDate 형식은 YYYY-MM-DD입니다."
+      });
+    }
+
+    if (dateList.length > 180) {
+      return res.status(400).json({
+        ok: false,
+        message: "한 번에 조회 가능한 기간은 최대 180일입니다."
+      });
+    }
+
+    const allRows = [];
+    const dayResults = [];
+    const type = req.query.type ? String(req.query.type) : undefined;
+    const accountId = req.query.account_id ? String(req.query.account_id) : undefined;
+
+    for (const ymd of dateList) {
+      const from = ymdToKstDateTime(ymd, false);
+      const to = ymdToKstDateTime(ymd, true);
+
+      const result = await fetchDetailedOrdersByCondition({
+        from,
+        to,
+        rangeType: "PAYED_DATETIME",
+        productOrderStatuses: "PAYED",
+        page: "1",
+        size: "300",
+        type,
+        accountId
+      });
+
+      const simpleOrders = result.rows.map(extractSimpleOrder);
+
+      allRows.push(...simpleOrders);
+
+      dayResults.push({
+        date: ymd,
+        count: simpleOrders.length,
+        detailFetchUsed: result.detailFetchUsed,
+        productOrderIds: result.productOrderIds
+      });
+    }
+
+    const uniqueMap = new Map();
+    for (const row of allRows) {
+      const key = row.productOrderId || `${row.orderNo}-${row.productName}-${row.quantity}`;
+      if (!uniqueMap.has(key)) uniqueMap.set(key, row);
+    }
+
+    const orders = Array.from(uniqueMap.values());
+
+    res.json({
+      ok: true,
+      message: "네이버 스마트스토어 미발송/결제완료 주문 전체 조회 성공",
+      admin: req.adminUser.email,
+      query: {
+        startDate: startYmd,
+        endDate: endYmd,
+        days: dateList.length,
+        productOrderStatuses: "PAYED",
+        rangeType: "PAYED_DATETIME"
+      },
+      count: orders.length,
+      orders,
+      dayResults
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({
+      ok: false,
+      message: error.message,
+      status: error.status || 500,
+      detail: error.data || null
+    });
+  }
+});
+
 
 app.post("/naver/confirm-order", requireFirebaseAdmin, async (req, res) => {
   try {
