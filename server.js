@@ -734,17 +734,27 @@ function extractEstimateNoFromText(...values) {
     .map((value) => String(value))
     .join(" ");
 
+  // 견적번호는 반드시 아래 형태만 인정합니다.
+  // 260622-000004
+  // 260622_000004
+  // 260622 000004
+  // EST-260622-000004
+  // "견적번호: 260622-000004"
+  //
+  // 네이버 옵션코드처럼 44738949875, 45239542245 같은 숫자는 더 이상 견적번호로 인식하지 않습니다.
   const patterns = [
-    /(EST[-_\s]?\d{6}[-_\s]?\d{3,6})/i,
-    /(CNF[-_\s]?\d{6}[-_\s]?\d{3,6})/i,
-    /(견적서번호|견적번호|견적\s*번호|estimate\s*no\.?)\s*[:：]?\s*([A-Z]{2,5}[-_\s]?\d{6}[-_\s]?\d{3,6}|\d{6}[-_\s]?\d{3,6})/i,
-    /(\d{6}[-_\s]?\d{3,6})/
+    /(EST[-_\s]?\d{6}[-_\s]\d{6})/i,
+    /(CNF[-_\s]?\d{6}[-_\s]\d{6})/i,
+    /(견적서번호|견적번호|견적\s*번호|주문번호|estimate\s*no\.?)\s*[:：]?\s*([A-Z]{2,5}[-_\s]?\d{6}[-_\s]\d{6}|\d{6}[-_\s]\d{6})/i,
+    /(\d{6}[-_\s]\d{6})/
   ];
 
   for (const pattern of patterns) {
     const match = text.match(pattern);
+
     if (match) {
       const raw = match[2] || match[1];
+
       return String(raw)
         .toUpperCase()
         .replace(/\s+/g, "-")
