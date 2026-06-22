@@ -591,6 +591,7 @@ async function saveNaverOrdersToFirestore(orders, source = "manual") {
     const docRef = collection.doc(String(productOrderId));
     const payload = removeUndefinedDeep({
       ...order,
+      estimateNo: order.estimateNo || extractEstimateNoFromText(order.optionInfo, order.optionCode, order.shippingMemo, order.productName),
       paymentDateYmd: dateOnlyFromDateTime(order.paymentDate),
       orderDateYmd: dateOnlyFromDateTime(order.orderDate),
       source,
@@ -631,7 +632,10 @@ function filterStoredOrders(orders, { startDate, endDate, keyword }) {
       order.orderName,
       order.receiverName,
       order.productName,
+      order.optionInfo,
       order.optionCode,
+      order.estimateNo,
+      order.matchedEstimateNo,
       order.status,
       order.shippingMemo
     ].join(" ").toLowerCase();
@@ -708,6 +712,10 @@ function filterEstimates(rows, { startDate, endDate, keyword, status }) {
       row.coatingText,
       row.foilText,
       row.pdfFileName,
+      row.matchedEstimateNo,
+      row.matchedNaverOrderNo,
+      row.matchedNaverProductOrderId,
+      row.matchType,
       rowStatus,
       getEstimateStatusLabel(rowStatus)
     ].join(" ").toLowerCase();
@@ -716,6 +724,166 @@ function filterEstimates(rows, { startDate, endDate, keyword, status }) {
 
     return dateMatched && statusMatched && keywordMatched;
   });
+}
+
+
+
+function extractEstimateNoFromText(...values) {
+  const text = values
+    .filter((value) => value !== undefined && value !== null)
+    .map((value) => String(value))
+    .join(" ");
+
+  const patterns = [
+    /(EST[-_\s]?\d{6}[-_\s]?\d{3,6})/i,
+    /(CNF[-_\s]?\d{6}[-_\s]?\d{3,6})/i,
+    /(견적번호|견적\s*번호|estimate\s*no\.?)\s*[:：]?\s*([A-Z]{2,5}[-_\s]?\d{6}[-_\s]?\d{3,6})/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const raw = match[2] || match[1];
+      return String(raw).toUpperCase().replace(/\s+/g, "-").replace(/_/g, "-");
+    }
+  }
+
+  return "";
+}
+
+function normalizeAmount(value) {
+  const number = Number(String(value || "0").replace(/[^\d.-]/g, ""));
+  return Number.isFinite(number) ? Math.round(number) : 0;
+}
+
+function getEstimateAmount(row) {
+  return normalizeAmount(row.totalPrice || row.finalPrice || row.estimatePrice || row.amount);
+}
+
+function getNaverOrderAmount(row) {
+  return normalizeAmount(row.amount || row.totalProductAmount || row.paymentAmount);
+}
+
+function normalizeName(value) {
+  return String(value || "").replace(/\s+/g, "").trim().toLowerCase();
+}
+
+function getEstimateCustomerName(row) {
+  return row.customerName || row.orderName || row.buyerName || "";
+}
+
+function getNaverBuyerName(row) {
+  return row.buyerName || row.orderName || "";
+}
+
+async function matchNaverOrdersToEstimates(orders, source = "auto") {
+  initFirebaseAdmin();
+
+  if (!orders || !orders.length) {
+    return { matchedCount: 0, candidatesCount: 0, results: [] };
+  }
+
+  const db = admin.firestore();
+  const estimatesRef = db.collection("estimates");
+  const results = [];
+  let matchedCount = 0;
+  let candidatesCount = 0;
+
+  for (const order of orders) {
+    const productOrderId = String(order.productOrderId || "").trim();
+    if (!productOrderId) continue;
+
+    const estimateNo = extractEstimateNoFromText(
+      order.estimateNo,
+      order.optionInfo,
+      order.optionCode,
+      order.shippingMemo,
+      order.productName,
+      order.orderNo,
+      order.raw ? JSON.stringify(order.raw).slice(0, 3000) : ""
+    );
+
+    let matchedEstimate = null;
+    let matchType = "";
+    let candidateEstimates = [];
+
+    if (estimateNo) {
+      const snapshot = await estimatesRef.where("estimateNo", "==", estimateNo).limit(1).get();
+      if (!snapshot.empty) {
+        matchedEstimate = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
+        matchType = "estimateNo";
+      }
+    }
+
+    if (!matchedEstimate) {
+      const amount = getNaverOrderAmount(order);
+      const buyerName = normalizeName(getNaverBuyerName(order));
+
+      if (amount && buyerName) {
+        const snapshot = await estimatesRef
+          .where("totalPrice", "==", amount)
+          .limit(20)
+          .get();
+
+        candidateEstimates = snapshot.docs
+          .map((doc) => ({ id: doc.id, ...doc.data() }))
+          .filter((estimate) => normalizeName(getEstimateCustomerName(estimate)) === buyerName);
+
+        if (candidateEstimates.length === 1) {
+          matchedEstimate = candidateEstimates[0];
+          matchType = "buyerNameAmount";
+        } else if (candidateEstimates.length > 1) {
+          candidatesCount++;
+        }
+      }
+    }
+
+    if (matchedEstimate) {
+      const estimateDocRef = estimatesRef.doc(matchedEstimate.id);
+      const orderDocRef = db.collection("naverOrders").doc(productOrderId);
+
+      const matchPayload = {
+        matchedEstimateId: matchedEstimate.id,
+        matchedEstimateNo: matchedEstimate.estimateNo || estimateNo || "",
+        matchedNaverProductOrderId: productOrderId,
+        matchedNaverOrderNo: order.orderNo || order.orderId || "",
+        matchedNaverAmount: getNaverOrderAmount(order),
+        matchedNaverBuyerName: getNaverBuyerName(order),
+        matchType,
+        matchedAt: admin.firestore.FieldValue.serverTimestamp(),
+        matchedBy: source,
+        orderStatus: "PAID",
+        orderStatusLabel: "결제완료",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      };
+
+      await estimateDocRef.set(matchPayload, { merge: true });
+
+      await orderDocRef.set({
+        matchedEstimateId: matchedEstimate.id,
+        matchedEstimateNo: matchedEstimate.estimateNo || estimateNo || "",
+        matchType,
+        matchedAt: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+
+      matchedCount++;
+      results.push({
+        productOrderId,
+        estimateId: matchedEstimate.id,
+        estimateNo: matchedEstimate.estimateNo || estimateNo || "",
+        matchType
+      });
+    } else {
+      results.push({
+        productOrderId,
+        estimateNo,
+        matchType: "",
+        candidatesCount: candidateEstimates.length || 0
+      });
+    }
+  }
+
+  return { matchedCount, candidatesCount, results };
 }
 
 
@@ -873,6 +1041,7 @@ app.get("/naver/orders", requireFirebaseAdmin, async (req, res) => {
 
     const simpleOrders = detailRows.map(extractSimpleOrder).filter(isBeforeShipmentOrClaim);
     const savedCount = await saveNaverOrdersToFirestore(simpleOrders, "naver-orders");
+    const matchResult = await matchNaverOrdersToEstimates(simpleOrders, "naver-orders");
 
     res.json({
       ok: true,
@@ -888,6 +1057,9 @@ app.get("/naver/orders", requireFirebaseAdmin, async (req, res) => {
       },
       count: simpleOrders.length,
       savedCount,
+      matchedCount: matchResult.matchedCount,
+      candidatesCount: matchResult.candidatesCount,
+      matchResult,
       detailFetchUsed,
       productOrderIds,
       orders: simpleOrders,
@@ -973,6 +1145,7 @@ app.get("/naver/unshipped-orders", requireFirebaseAdmin, async (req, res) => {
 
     const orders = Array.from(uniqueMap.values());
     const savedCount = await saveNaverOrdersToFirestore(orders, "naver-unshipped-orders");
+    const matchResult = await matchNaverOrdersToEstimates(orders, "naver-unshipped-orders");
 
     res.json({
       ok: true,
@@ -987,6 +1160,9 @@ app.get("/naver/unshipped-orders", requireFirebaseAdmin, async (req, res) => {
       },
       count: orders.length,
       savedCount,
+      matchedCount: matchResult.matchedCount,
+      candidatesCount: matchResult.candidatesCount,
+      matchResult,
       orders,
       dayResults
     });
@@ -1169,6 +1345,142 @@ app.get("/stored/naver-orders", requireFirebaseAdmin, async (req, res) => {
       },
       count: filteredOrders.length,
       orders: filteredOrders
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({
+      ok: false,
+      message: error.message,
+      status: error.status || 500,
+      detail: error.data || null
+    });
+  }
+});
+
+
+
+app.post("/stored/match-estimate-naver", requireFirebaseAdmin, async (req, res) => {
+  try {
+    initFirebaseAdmin();
+
+    const estimateId = String(req.body.estimateId || "").trim();
+    const productOrderId = String(req.body.productOrderId || "").trim();
+
+    if (!estimateId || !productOrderId) {
+      return res.status(400).json({
+        ok: false,
+        message: "estimateId와 productOrderId가 필요합니다."
+      });
+    }
+
+    const db = admin.firestore();
+    const estimateRef = db.collection("estimates").doc(estimateId);
+    const orderRef = db.collection("naverOrders").doc(productOrderId);
+
+    const [estimateSnap, orderSnap] = await Promise.all([estimateRef.get(), orderRef.get()]);
+
+    if (!estimateSnap.exists) {
+      return res.status(404).json({ ok: false, message: "견적서를 찾을 수 없습니다." });
+    }
+
+    if (!orderSnap.exists) {
+      return res.status(404).json({ ok: false, message: "네이버 주문을 찾을 수 없습니다." });
+    }
+
+    const estimate = estimateSnap.data();
+    const order = orderSnap.data();
+
+    await estimateRef.set({
+      matchedEstimateNo: estimate.estimateNo || "",
+      matchedNaverProductOrderId: productOrderId,
+      matchedNaverOrderNo: order.orderNo || order.orderId || "",
+      matchedNaverAmount: getNaverOrderAmount(order),
+      matchedNaverBuyerName: getNaverBuyerName(order),
+      matchType: "manual",
+      matchedAt: admin.firestore.FieldValue.serverTimestamp(),
+      matchedBy: req.adminUser.email,
+      orderStatus: "PAID",
+      orderStatusLabel: "결제완료",
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedBy: req.adminUser.email
+    }, { merge: true });
+
+    await orderRef.set({
+      matchedEstimateId: estimateId,
+      matchedEstimateNo: estimate.estimateNo || "",
+      matchType: "manual",
+      matchedAt: admin.firestore.FieldValue.serverTimestamp(),
+      matchedBy: req.adminUser.email
+    }, { merge: true });
+
+    res.json({
+      ok: true,
+      message: "견적서와 네이버 주문 매칭 완료",
+      estimateId,
+      productOrderId
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({
+      ok: false,
+      message: error.message,
+      status: error.status || 500,
+      detail: error.data || null
+    });
+  }
+});
+
+app.post("/stored/unmatch-estimate", requireFirebaseAdmin, async (req, res) => {
+  try {
+    initFirebaseAdmin();
+
+    const estimateId = String(req.body.estimateId || "").trim();
+
+    if (!estimateId) {
+      return res.status(400).json({
+        ok: false,
+        message: "estimateId가 필요합니다."
+      });
+    }
+
+    const db = admin.firestore();
+    const estimateRef = db.collection("estimates").doc(estimateId);
+    const estimateSnap = await estimateRef.get();
+
+    if (!estimateSnap.exists) {
+      return res.status(404).json({ ok: false, message: "견적서를 찾을 수 없습니다." });
+    }
+
+    const estimate = estimateSnap.data();
+    const productOrderId = estimate.matchedNaverProductOrderId || "";
+
+    await estimateRef.set({
+      matchedNaverProductOrderId: admin.firestore.FieldValue.delete(),
+      matchedNaverOrderNo: admin.firestore.FieldValue.delete(),
+      matchedNaverAmount: admin.firestore.FieldValue.delete(),
+      matchedNaverBuyerName: admin.firestore.FieldValue.delete(),
+      matchType: admin.firestore.FieldValue.delete(),
+      matchedAt: admin.firestore.FieldValue.delete(),
+      matchedBy: admin.firestore.FieldValue.delete(),
+      orderStatus: "UNPAID",
+      orderStatusLabel: "미결제",
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedBy: req.adminUser.email
+    }, { merge: true });
+
+    if (productOrderId) {
+      await db.collection("naverOrders").doc(String(productOrderId)).set({
+        matchedEstimateId: admin.firestore.FieldValue.delete(),
+        matchedEstimateNo: admin.firestore.FieldValue.delete(),
+        matchType: admin.firestore.FieldValue.delete(),
+        matchedAt: admin.firestore.FieldValue.delete(),
+        matchedBy: admin.firestore.FieldValue.delete()
+      }, { merge: true });
+    }
+
+    res.json({
+      ok: true,
+      message: "매칭 해제 완료",
+      estimateId,
+      productOrderId
     });
   } catch (error) {
     res.status(error.status || 500).json({

@@ -1,8 +1,17 @@
 # cnffurdl-order-api
 
-구매자명/옵션정보 추출을 보강한 버전입니다.
+견적서와 네이버 스마트스토어 주문 자동매칭 버전입니다.
 
-- 옵션정보 우선 표시
-- 구매자명 필드 경로 보강
-- 배송 전/클레임 주문 조회
-- 견적 상태 관리/삭제
+## Matching
+
+1. 견적번호 exact match
+2. 구매자명 + 결제금액 match
+3. 수동 매칭 API
+
+## Endpoints
+
+- `/naver/unshipped-orders`
+- `/stored/naver-orders`
+- `/stored/estimates`
+- `POST /stored/match-estimate-naver`
+- `POST /stored/unmatch-estimate`
