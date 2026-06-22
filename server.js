@@ -1438,6 +1438,57 @@ app.patch("/stored/estimates/:estimateId/status", requireFirebaseAdmin, async (r
   }
 });
 
+
+app.patch("/stored/estimates/:estimateId/file-received", requireFirebaseAdmin, async (req, res) => {
+  try {
+    initFirebaseAdmin();
+
+    const estimateId = decodeURIComponent(req.params.estimateId || "");
+    const fileReceived = !!req.body.fileReceived;
+
+    if (!estimateId) {
+      return res.status(400).json({
+        ok: false,
+        message: "estimateId가 필요합니다."
+      });
+    }
+
+    const db = admin.firestore();
+    const ref = db.collection("estimates").doc(estimateId);
+    const snapshot = await ref.get();
+
+    if (!snapshot.exists) {
+      return res.status(404).json({
+        ok: false,
+        message: "견적서를 찾을 수 없습니다."
+      });
+    }
+
+    await ref.set({
+      fileReceived,
+      fileReceivedAt: fileReceived ? admin.firestore.FieldValue.serverTimestamp() : null,
+      fileReceivedBy: fileReceived ? req.adminUser.email : "",
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedBy: req.adminUser.email
+    }, { merge: true });
+
+    res.json({
+      ok: true,
+      estimateId,
+      fileReceived,
+      message: fileReceived ? "파일접수 체크 완료" : "파일접수 체크 해제 완료"
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({
+      ok: false,
+      message: error.message,
+      status: error.status || 500,
+      detail: error.data || null
+    });
+  }
+});
+
+
 app.delete("/stored/estimates/:estimateId", requireFirebaseAdmin, async (req, res) => {
   try {
     initFirebaseAdmin();

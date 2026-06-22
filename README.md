@@ -30,3 +30,6 @@ Fix: Express route typo corrected. `/naver/env-check` route now starts correctly
 
 
 Fix: 견적번호 추출을 `260622-000004` 형태로 엄격화했습니다. 네이버 옵션코드 숫자는 매칭견적으로 인식하지 않습니다.
+
+
+Added: `PATCH /stored/estimates/:estimateId/file-received` 파일접수 체크 저장 API.

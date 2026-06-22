@@ -1,7 +1,7 @@
 {
   "name": "cnffurdl-order-api",
-  "version": "2.7.4",
-  "description": "출력이 견적-네이버 주문 자동매칭 API 서버 - strict estimate number matching",
+  "version": "2.7.5",
+  "description": "출력이 견적-네이버 주문 자동매칭 API 서버 - file received flag",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
