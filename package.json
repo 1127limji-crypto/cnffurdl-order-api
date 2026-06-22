@@ -1,7 +1,7 @@
 {
   "name": "cnffurdl-order-api",
-  "version": "2.7.0",
-  "description": "출력이 견적-네이버 주문 자동매칭 API 서버",
+  "version": "2.7.1",
+  "description": "출력이 견적-네이버 주문 자동매칭 API 서버 - unshipped helper fix",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

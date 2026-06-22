@@ -15,3 +15,9 @@
 - `/stored/estimates`
 - `POST /stored/match-estimate-naver`
 - `POST /stored/unmatch-estimate`
+
+
+추가 변경: 견적서번호 앞의 "견적서번호" 텍스트 없이 `260622-000001` 형태의 숫자 번호만으로도 자동 매칭됩니다.
+
+
+Fix: `/naver/unshipped-orders`에서 누락된 날짜/상세조회 helper 함수를 복구했습니다.

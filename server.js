@@ -737,14 +737,19 @@ function extractEstimateNoFromText(...values) {
   const patterns = [
     /(EST[-_\s]?\d{6}[-_\s]?\d{3,6})/i,
     /(CNF[-_\s]?\d{6}[-_\s]?\d{3,6})/i,
-    /(견적번호|견적\s*번호|estimate\s*no\.?)\s*[:：]?\s*([A-Z]{2,5}[-_\s]?\d{6}[-_\s]?\d{3,6})/i
+    /(견적서번호|견적번호|견적\s*번호|estimate\s*no\.?)\s*[:：]?\s*([A-Z]{2,5}[-_\s]?\d{6}[-_\s]?\d{3,6}|\d{6}[-_\s]?\d{3,6})/i,
+    /(\d{6}[-_\s]?\d{3,6})/
   ];
 
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (match) {
       const raw = match[2] || match[1];
-      return String(raw).toUpperCase().replace(/\s+/g, "-").replace(/_/g, "-");
+      return String(raw)
+        .toUpperCase()
+        .replace(/\s+/g, "-")
+        .replace(/_/g, "-")
+        .replace(/^-+|-+$/g, "");
     }
   }
 
@@ -986,6 +991,109 @@ app.get("/naver/token-test", requireFirebaseAdmin, async (req, res) => {
     });
   }
 });
+
+
+function getKstYmd(date = new Date()) {
+  const kst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
+  return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, "0")}-${String(kst.getUTCDate()).padStart(2, "0")}`;
+}
+
+function parseYmdToDate(ymd) {
+  const match = String(ymd || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+
+  const yyyy = Number(match[1]);
+  const mm = Number(match[2]);
+  const dd = Number(match[3]);
+
+  return new Date(Date.UTC(yyyy, mm - 1, dd, 0, 0, 0, 0));
+}
+
+function ymdToKstDateTime(ymd, endOfDay = false) {
+  return `${ymd}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}+09:00`;
+}
+
+function addDaysUtc(date, days) {
+  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+function getDateRangeList(startYmd, endYmd) {
+  const start = parseYmdToDate(startYmd);
+  const end = parseYmdToDate(endYmd);
+
+  if (!start || !end || start > end) {
+    return [];
+  }
+
+  const list = [];
+  let current = start;
+
+  while (current <= end) {
+    list.push(getKstYmd(current));
+    current = addDaysUtc(current, 1);
+  }
+
+  return list;
+}
+
+async function fetchDetailedOrdersByCondition({
+  from,
+  to,
+  rangeType = "PAYED_DATETIME",
+  productOrderStatuses = "",
+  page = "1",
+  size = "300",
+  type,
+  accountId
+}) {
+  const params = new URLSearchParams();
+
+  params.append("from", from);
+  params.append("to", to);
+  params.append("rangeType", rangeType);
+  params.append("page", page);
+  params.append("size", size);
+
+  if (productOrderStatuses) {
+    params.append("productOrderStatuses", productOrderStatuses);
+  }
+
+  const result = await naverApiFetch(`/v1/pay-order/seller/product-orders?${params.toString()}`, {
+    method: "GET",
+    type,
+    accountId
+  });
+
+  const contents = getContentsFromNaverResponse(result.data);
+  const productOrderIds = getProductOrderIdsFromRows(contents);
+
+  let detailRows = contents;
+  let detailFetchUsed = false;
+
+  if (productOrderIds.length && (!contents.length || !contents.some(hasOrderDetail))) {
+    detailRows = await getProductOrderDetailsByIds(productOrderIds, {
+      type,
+      accountId
+    });
+    detailFetchUsed = true;
+  }
+
+  return {
+    query: {
+      from,
+      to,
+      rangeType,
+      productOrderStatuses,
+      page,
+      size
+    },
+    productOrderIds,
+    detailFetchUsed,
+    rows: detailRows,
+    raw: detailFetchUsed ? { firstQuery: result.data, detailRows } : result.data
+  };
+}
+
 
 app.get("/naver/orders", requireFirebaseAdmin, async (req, res) => {
   try {
