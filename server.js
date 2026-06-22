@@ -987,8 +987,7 @@ app.get("/public/next-estimate-no", async (req, res) => {
 });
 
 
-app.get("/public/next-estimate-no",
-      "/naver/env-check", (req, res) => {
+app.get("/naver/env-check", (req, res) => {
   const clientId = process.env.NAVER_COMMERCE_CLIENT_ID || "";
   const clientSecret = process.env.NAVER_COMMERCE_CLIENT_SECRET || "";
 

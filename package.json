@@ -1,7 +1,7 @@
 {
   "name": "cnffurdl-order-api",
-  "version": "2.7.2",
-  "description": "출력이 견적-네이버 주문 자동매칭 API 서버 - shared estimate sequence",
+  "version": "2.7.3",
+  "description": "출력이 견적-네이버 주문 자동매칭 API 서버 - fixed route startup",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
