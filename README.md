@@ -21,3 +21,6 @@
 
 
 Fix: `/naver/unshipped-orders`에서 누락된 날짜/상세조회 helper 함수를 복구했습니다.
+
+
+Added: `/public/next-estimate-no` 공통 견적번호 발급 API. estimate.html과 estimate-foil.html이 같은 번호 시퀀스를 사용합니다.

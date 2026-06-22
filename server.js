@@ -901,6 +901,7 @@ app.get("/", (req, res) => {
     endpoints: [
       "/health",
       "/ip",
+      "/public/next-estimate-no",
       "/naver/env-check",
       "/naver/token-test",
       "/naver/orders",
@@ -940,7 +941,54 @@ app.get("/ip", async (req, res) => {
   }
 });
 
-app.get("/naver/env-check", (req, res) => {
+
+app.get("/public/next-estimate-no", async (req, res) => {
+  try {
+    initFirebaseAdmin();
+
+    const now = new Date();
+    const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+    const yy = String(kst.getUTCFullYear()).slice(2);
+    const mm = String(kst.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(kst.getUTCDate()).padStart(2, "0");
+    const datePart = `${yy}${mm}${dd}`;
+
+    const db = admin.firestore();
+    const counterRef = db.collection("counters").doc(`estimateNo_${datePart}`);
+
+    const result = await db.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(counterRef);
+      const currentSeq = snapshot.exists ? Number(snapshot.data().seq || 0) : 0;
+      const nextSeq = currentSeq + 1;
+
+      transaction.set(counterRef, {
+        datePart,
+        seq: nextSeq,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+
+      return {
+        datePart,
+        seq: nextSeq,
+        estimateNo: `${datePart}-${String(nextSeq).padStart(6, "0")}`
+      };
+    });
+
+    res.json({
+      ok: true,
+      ...result
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
+
+app.get("/public/next-estimate-no",
+      "/naver/env-check", (req, res) => {
   const clientId = process.env.NAVER_COMMERCE_CLIENT_ID || "";
   const clientSecret = process.env.NAVER_COMMERCE_CLIENT_SECRET || "";
 
