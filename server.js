@@ -50,6 +50,13 @@ function initFirebaseAdmin() {
     });
   }
 
+  // Cloudtype 환경에서 Firestore gRPC/HTTP2 연결이 지연되는 경우를 피하기 위해
+  // Firestore 공식 REST transport를 우선 사용합니다.
+  const firestore = admin.firestore();
+  firestore.settings({
+    preferRest: true
+  });
+
   firebaseAdminInitialized = true;
 }
 
