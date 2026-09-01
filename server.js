@@ -951,6 +951,7 @@ app.get("/", (req, res) => {
       "/health",
       "/ip",
       "/public/next-estimate-no",
+      "/public/estimates",
       "/naver/env-check",
       "/naver/token-test",
       "/naver/orders",
@@ -1035,6 +1036,211 @@ app.get("/public/next-estimate-no", async (req, res) => {
   }
 });
 
+
+
+// PUBLIC_ESTIMATE_SUBMIT_V1
+// Cafe24 고객 견적페이지 -> Cloudtype -> Firebase Admin 저장.
+// requestId를 Firestore에 같이 저장해 네트워크 timeout 후 재시도해도 중복 견적번호가 생기지 않게 합니다.
+function publicEstimateString(value, maxLength = 200) {
+  return String(value ?? "").trim().slice(0, maxLength);
+}
+
+function publicEstimateNumber(value, fallback = 0, min = -Number.MAX_SAFE_INTEGER, max = Number.MAX_SAFE_INTEGER) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, number));
+}
+
+function publicEstimateBoolean(value) {
+  return value === true;
+}
+
+function publicEstimateKstLocalText(date = new Date()) {
+  const kst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
+  return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, "0")}-${String(kst.getUTCDate()).padStart(2, "0")} ${String(kst.getUTCHours()).padStart(2, "0")}:${String(kst.getUTCMinutes()).padStart(2, "0")}:${String(kst.getUTCSeconds()).padStart(2, "0")}`;
+}
+
+function publicEstimateSafeFileName(value) {
+  return publicEstimateString(value, 40)
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/\s+/g, "_") || "주문자";
+}
+
+function buildPublicEstimatePayload(input, estimateNo) {
+  const totalPrice = Math.round(publicEstimateNumber(input.totalPrice, 0, 0, 1000000000));
+  const source = publicEstimateString(input.source, 40) || "estimate-html";
+  const customerName = publicEstimateString(input.customerName, 80);
+  const now = new Date();
+
+  return {
+    estimateNo,
+    customerName,
+    paperName: publicEstimateString(input.paperName, 100),
+    itemW: publicEstimateNumber(input.itemW, 0, 0, 10000),
+    itemH: publicEstimateNumber(input.itemH, 0, 0, 10000),
+    finalQty: Math.round(publicEstimateNumber(input.finalQty, 0, 0, 10000000)),
+    perSheet: Math.round(publicEstimateNumber(input.perSheet, 0, 0, 100000)),
+    needSheets: Math.round(publicEstimateNumber(input.needSheets, 0, 0, 10000000)),
+    layoutLabel: publicEstimateString(input.layoutLabel, 100),
+    layoutDetail: publicEstimateString(input.layoutDetail, 300),
+    coatingText: publicEstimateString(input.coatingText, 100),
+    foilText: publicEstimateString(input.foilText, 100),
+    additionalOptionsText: publicEstimateString(input.additionalOptionsText, 500),
+    doublePrint: publicEstimateBoolean(input.doublePrint),
+    diecut: publicEstimateBoolean(input.diecut),
+    oshi: publicEstimateBoolean(input.oshi),
+    oshiCount: Math.round(publicEstimateNumber(input.oshiCount, 0, 0, 100)),
+    punch: publicEstimateBoolean(input.punch),
+    punchCount: Math.round(publicEstimateNumber(input.punchCount, 0, 0, 100)),
+    circlePunch: publicEstimateBoolean(input.circlePunch),
+    circlePunchSize: publicEstimateString(input.circlePunchSize, 30),
+    circlePunchCount: Math.round(publicEstimateNumber(input.circlePunchCount, 0, 0, 100)),
+    freePunch: publicEstimateBoolean(input.freePunch),
+    freePunchCount: Math.round(publicEstimateNumber(input.freePunchCount, 0, 0, 100)),
+    unitPrice: Math.round(publicEstimateNumber(input.unitPrice, 0, 0, 1000000000)),
+    paperCostTotal: Math.round(publicEstimateNumber(input.paperCostTotal, 0, 0, 1000000000)),
+    printCostTotal: Math.round(publicEstimateNumber(input.printCostTotal, 0, 0, 1000000000)),
+    postProcessCostTotal: Math.round(publicEstimateNumber(input.postProcessCostTotal, 0, 0, 1000000000)),
+    doublePrintTotal: Math.round(publicEstimateNumber(input.doublePrintTotal, 0, 0, 1000000000)),
+    coatingTotal: Math.round(publicEstimateNumber(input.coatingTotal, 0, 0, 1000000000)),
+    diecutTotal: Math.round(publicEstimateNumber(input.diecutTotal, 0, 0, 1000000000)),
+    oshiCost: Math.round(publicEstimateNumber(input.oshiCost, 0, 0, 1000000000)),
+    punchCost: Math.round(publicEstimateNumber(input.punchCost, 0, 0, 1000000000)),
+    circlePunchCost: Math.round(publicEstimateNumber(input.circlePunchCost, 0, 0, 1000000000)),
+    freePunchCost: Math.round(publicEstimateNumber(input.freePunchCost, 0, 0, 1000000000)),
+    totalPrice,
+    orderStatus: "UNPAID",
+    orderStatusLabel: "미결제",
+    source,
+    pdfFileName: `${publicEstimateSafeFileName(customerName)}_견적서_${estimateNo}.pdf`,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAtLocal: publicEstimateKstLocalText(now),
+    createdAtIso: now.toISOString(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    smartstorePaymentUnitPrice: 100,
+    smartstorePaymentQty: Math.ceil(totalPrice / 100),
+    smartstoreOrderUrl: "https://smartstore.naver.com/presswork/products/10348848308"
+  };
+}
+
+app.post("/public/estimates", async (req, res) => {
+  try {
+    const origin = String(req.headers.origin || "");
+    if (origin && origin !== "https://cnffurdl.cafe24.com") {
+      return res.status(403).json({
+        ok: false,
+        code: "ORIGIN_NOT_ALLOWED",
+        message: "허용되지 않은 견적서 전송 요청입니다."
+      });
+    }
+
+    const requestId = publicEstimateString(req.body && req.body.requestId, 100);
+    const input = req.body && req.body.estimate;
+
+    if (!/^[A-Za-z0-9_-]{12,100}$/.test(requestId)) {
+      return res.status(400).json({
+        ok: false,
+        code: "INVALID_REQUEST_ID",
+        message: "견적서 요청 ID가 올바르지 않습니다."
+      });
+    }
+
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      return res.status(400).json({
+        ok: false,
+        code: "INVALID_ESTIMATE",
+        message: "견적서 데이터가 없습니다."
+      });
+    }
+
+    const customerName = publicEstimateString(input.customerName, 80);
+    const finalQty = publicEstimateNumber(input.finalQty, 0);
+    const totalPrice = publicEstimateNumber(input.totalPrice, 0);
+    const source = publicEstimateString(input.source, 40) || "estimate-html";
+
+    if (!customerName) {
+      return res.status(400).json({ ok: false, code: "CUSTOMER_NAME_REQUIRED", message: "주문자명이 없습니다." });
+    }
+    if (finalQty < 1 || totalPrice < 1) {
+      return res.status(400).json({ ok: false, code: "INVALID_AMOUNT", message: "수량 또는 견적금액이 올바르지 않습니다." });
+    }
+    if (!["estimate-html", "estimate-foil"].includes(source)) {
+      return res.status(400).json({ ok: false, code: "INVALID_SOURCE", message: "견적서 종류가 올바르지 않습니다." });
+    }
+
+    initFirebaseAdmin();
+    const db = admin.firestore();
+    const requestRef = db.collection("estimateRequests").doc(requestId);
+
+    const result = await db.runTransaction(async (transaction) => {
+      const existingRequest = await transaction.get(requestRef);
+      if (existingRequest.exists) {
+        const existing = existingRequest.data() || {};
+        return {
+          duplicate: true,
+          estimateNo: publicEstimateString(existing.estimateNo, 40)
+        };
+      }
+
+      const now = new Date();
+      const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+      const yy = String(kst.getUTCFullYear()).slice(2);
+      const mm = String(kst.getUTCMonth() + 1).padStart(2, "0");
+      const dd = String(kst.getUTCDate()).padStart(2, "0");
+      const datePart = `${yy}${mm}${dd}`;
+      const counterRef = db.collection("counters").doc(`estimateNo_${datePart}`);
+      const counterSnapshot = await transaction.get(counterRef);
+      const currentSeq = counterSnapshot.exists ? Number(counterSnapshot.data().seq || 0) : 0;
+      const nextSeq = currentSeq + 1;
+      const estimateNo = `${datePart}-${String(nextSeq).padStart(6, "0")}`;
+      const estimateRef = db.collection("estimates").doc(estimateNo);
+      const payload = buildPublicEstimatePayload(input, estimateNo);
+
+      transaction.set(counterRef, {
+        datePart,
+        seq: nextSeq,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+
+      transaction.set(estimateRef, payload, { merge: true });
+      transaction.set(requestRef, {
+        requestId,
+        estimateNo,
+        source,
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      return {
+        duplicate: false,
+        estimateNo
+      };
+    });
+
+    let estimate = null;
+    if (result.estimateNo) {
+      const saved = await db.collection("estimates").doc(result.estimateNo).get();
+      if (saved.exists) estimate = { id: saved.id, ...saved.data() };
+    }
+
+    if (!result.estimateNo || !estimate) {
+      throw new Error("중복방지 기록은 있으나 저장된 견적서를 찾지 못했습니다.");
+    }
+
+    return res.json({
+      ok: true,
+      duplicate: !!result.duplicate,
+      estimateNo: result.estimateNo,
+      estimate
+    });
+  } catch (error) {
+    console.error("POST /public/estimates failed", error);
+    return res.status(500).json({
+      ok: false,
+      code: "ESTIMATE_SAVE_FAILED",
+      message: "견적서 저장 중 서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+    });
+  }
+});
 
 app.get("/naver/env-check", (req, res) => {
   const clientId = process.env.NAVER_COMMERCE_CLIENT_ID || "";
