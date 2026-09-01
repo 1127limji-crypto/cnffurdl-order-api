@@ -954,6 +954,7 @@ app.get("/", (req, res) => {
     security: "Firebase ID token or Production Manager internal key required for protected endpoints",
     bridge: "naver-readonly-v1", // PRODUCTION_MANAGER_NAVER_BRIDGE_V1
     placeOrderStatus: "enabled", // PRODUCTION_MANAGER_PLACE_ORDER_STATUS_V1
+    changedStatusBridge: "v1", // PRODUCTION_MANAGER_CHANGED_STATUS_BRIDGE_V1
     endpoints: [
       "/health",
       "/ip",
@@ -1482,6 +1483,252 @@ app.get("/naver/orders", requireFirebaseAdmin, async (req, res) => {
       productOrderIds,
       orders: simpleOrders,
       raw: detailFetchUsed ? { firstQuery: result.data, detailRows } : result.data
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({
+      ok: false,
+      message: error.message,
+      status: error.status || 500,
+      detail: error.data || null
+    });
+  }
+});
+
+
+
+// PRODUCTION_MANAGER_CHANGED_STATUS_BRIDGE_V1
+// Production Manager 전용: 결제일이 아니라 마지막 변경 일시 기준으로 조회.
+// Firestore 저장/견적 자동매칭은 실행하지 않습니다.
+app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
+  try {
+    const type = req.query.type ? String(req.query.type) : undefined;
+    const accountId = req.query.account_id ? String(req.query.account_id) : undefined;
+
+    const now = new Date();
+    const defaultFrom = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const from = req.query.from ? String(req.query.from) : defaultFrom.toISOString();
+    const to = req.query.to ? String(req.query.to) : now.toISOString();
+
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+
+    if (
+      Number.isNaN(fromDate.getTime()) ||
+      Number.isNaN(toDate.getTime()) ||
+      fromDate >= toDate
+    ) {
+      return res.status(400).json({
+        ok: false,
+        message: "from/to 날짜 범위가 올바르지 않습니다."
+      });
+    }
+
+    if (toDate.getTime() - fromDate.getTime() > 31 * 24 * 60 * 60 * 1000) {
+      return res.status(400).json({
+        ok: false,
+        message: "변경 상태 조회 범위는 최대 31일입니다."
+      });
+    }
+
+    const changedRows = [];
+    let cursorFrom = from;
+    let moreSequence = "";
+    let pageCount = 0;
+    let previousCursor = "";
+
+    while (pageCount < 100) {
+      const params = new URLSearchParams();
+      params.set("lastChangedFrom", cursorFrom);
+      params.set("lastChangedTo", to);
+      params.set("limitCount", "300");
+
+      if (moreSequence) {
+        params.set("moreSequence", moreSequence);
+      }
+
+      const result = await naverApiFetch(
+        `/v1/pay-order/seller/product-orders/last-changed-statuses?${params.toString()}`,
+        {
+          method: "GET",
+          type,
+          accountId
+        }
+      );
+
+      const payload = result.data || {};
+      let batch = [];
+
+      if (Array.isArray(payload)) {
+        batch = payload;
+      } else if (Array.isArray(payload.data)) {
+        batch = payload.data;
+      } else {
+        batch = getContentsFromNaverResponse(payload);
+      }
+
+      changedRows.push(...batch);
+
+      const more =
+        (
+          payload &&
+          typeof payload.more === "object" &&
+          payload.more
+        ) ||
+        (
+          payload?.data &&
+          !Array.isArray(payload.data) &&
+          typeof payload.data.more === "object" &&
+          payload.data.more
+        ) ||
+        null;
+
+      pageCount++;
+
+      if (!more || !more.moreFrom) {
+        break;
+      }
+
+      const nextCursor = `${more.moreFrom}|${more.moreSequence ?? ""}`;
+      if (nextCursor === previousCursor) {
+        break;
+      }
+
+      previousCursor = nextCursor;
+      cursorFrom = String(more.moreFrom);
+      moreSequence =
+        more.moreSequence !== undefined && more.moreSequence !== null
+          ? String(more.moreSequence)
+          : "";
+    }
+
+    const latestByProductOrder = new Map();
+
+    for (const row of changedRows) {
+      const productOrderId = String(row?.productOrderId || "");
+      if (!productOrderId) continue;
+
+      const previous = latestByProductOrder.get(productOrderId);
+      if (
+        !previous ||
+        String(row?.lastChangedDate || "") >= String(previous?.lastChangedDate || "")
+      ) {
+        latestByProductOrder.set(productOrderId, row);
+      }
+    }
+
+    const changes = Array.from(latestByProductOrder.values());
+    const ids = changes
+      .map((row) => String(row.productOrderId || ""))
+      .filter(Boolean);
+
+    const detailRows = [];
+
+    for (let index = 0; index < ids.length; index += 300) {
+      const chunk = ids.slice(index, index + 300);
+      const details = await getProductOrderDetailsByIds(chunk, {
+        type,
+        accountId
+      });
+
+      detailRows.push(...(Array.isArray(details) ? details : []));
+    }
+
+    const changeMap = new Map(
+      changes.map((row) => [String(row.productOrderId || ""), row])
+    );
+
+    const seen = new Set();
+
+    const orders = detailRows.map((row) => {
+      const simple = extractSimpleOrder(row);
+      const productOrder = row?.productOrder || row?.data?.productOrder || {};
+
+      const productOrderId = String(
+        productOrder.productOrderId ||
+        simple.productOrderId ||
+        ""
+      );
+
+      seen.add(productOrderId);
+
+      const change = changeMap.get(productOrderId) || {};
+
+      return {
+        ...simple,
+        orderNo: simple.orderNo || change.orderId || "",
+        orderId: simple.orderId || change.orderId || "",
+        productOrderId,
+        productOrderStatus:
+          productOrder.productOrderStatus ||
+          change.productOrderStatus ||
+          simple.productOrderStatus ||
+          "",
+        placeOrderStatus:
+          productOrder.placeOrderStatus ||
+          simple.placeOrderStatus ||
+          "",
+        placeOrderDate:
+          productOrder.placeOrderDate ||
+          simple.placeOrderDate ||
+          "",
+        claimType:
+          productOrder.claimType ||
+          change.claimType ||
+          simple.claimType ||
+          "",
+        claimStatus:
+          productOrder.claimStatus ||
+          change.claimStatus ||
+          simple.claimStatus ||
+          "",
+        lastChangedType: change.lastChangedType || "",
+        lastChangedDate: change.lastChangedDate || "",
+        receiverAddressChanged: Boolean(change.receiverAddressChanged),
+        giftReceivingStatus: change.giftReceivingStatus || ""
+      };
+    });
+
+    // 상세조회가 누락된 ID도 최소 상태는 전달.
+    for (const change of changes) {
+      const productOrderId = String(change.productOrderId || "");
+      if (!productOrderId || seen.has(productOrderId)) continue;
+
+      orders.push({
+        orderNo: String(change.orderId || ""),
+        orderId: String(change.orderId || ""),
+        productOrderId,
+        paymentDate: change.paymentDate || "",
+        productOrderStatus: change.productOrderStatus || "",
+        claimType: change.claimType || "",
+        claimStatus: change.claimStatus || "",
+        lastChangedType: change.lastChangedType || "",
+        lastChangedDate: change.lastChangedDate || "",
+        receiverAddressChanged: Boolean(change.receiverAddressChanged),
+        giftReceivingStatus: change.giftReceivingStatus || ""
+      });
+    }
+
+    const statusCounts = {};
+    for (const row of orders) {
+      const key = String(row.productOrderStatus || "(없음)");
+      statusCounts[key] = (statusCounts[key] || 0) + 1;
+    }
+
+    res.json({
+      ok: true,
+      message: "네이버 변경 상품주문 조회 성공",
+      admin: req.adminUser.email,
+      bridgeOnly: true,
+      persistence: "skipped",
+      query: { from, to },
+      from,
+      to,
+      pageCount,
+      changedCount: changes.length,
+      detailCount: detailRows.length,
+      count: orders.length,
+      statusCounts,
+      orders
     });
   } catch (error) {
     res.status(error.status || 500).json({
