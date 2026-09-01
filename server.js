@@ -946,6 +946,7 @@ app.get("/", (req, res) => {
     message: "출력이 주문 API 서버가 정상 실행 중입니다.",
     security: "Firebase ID token or Production Manager internal key required for protected endpoints",
     bridge: "naver-readonly-v1", // PRODUCTION_MANAGER_NAVER_BRIDGE_V1
+    placeOrderStatus: "enabled", // PRODUCTION_MANAGER_PLACE_ORDER_STATUS_V1
     endpoints: [
       "/health",
       "/ip",
@@ -1329,7 +1330,28 @@ app.get("/naver/unshipped-orders", requireFirebaseAdmin, async (req, res) => {
         accountId
       });
 
-      const simpleOrders = result.rows.map(extractSimpleOrder).filter(isBeforeShipmentOrClaim);
+      const simpleOrders = result.rows.map((row) => {
+      const simple = extractSimpleOrder(row);
+      const productOrder =
+        (row && row.productOrder) ||
+        (row && row.data && row.data.productOrder) ||
+        {};
+
+      return {
+        ...simple,
+        // PRODUCTION_MANAGER_PLACE_ORDER_STATUS_V1
+        placeOrderStatus:
+          productOrder.placeOrderStatus ||
+          simple.placeOrderStatus ||
+          (row && row.placeOrderStatus) ||
+          "",
+        placeOrderDate:
+          productOrder.placeOrderDate ||
+          simple.placeOrderDate ||
+          (row && row.placeOrderDate) ||
+          ""
+      };
+    }).filter(isBeforeShipmentOrClaim);
 
       allRows.push(...simpleOrders);
 
