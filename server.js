@@ -945,6 +945,7 @@ app.get("/", (req, res) => {
     service: "cnffurdl-order-api",
     message: "출력이 주문 API 서버가 정상 실행 중입니다.",
     security: "Firebase ID token or Production Manager internal key required for protected endpoints",
+    bridge: "naver-readonly-v1", // PRODUCTION_MANAGER_NAVER_BRIDGE_V1
     endpoints: [
       "/health",
       "/ip",
@@ -1347,13 +1348,31 @@ app.get("/naver/unshipped-orders", requireFirebaseAdmin, async (req, res) => {
     }
 
     const orders = Array.from(uniqueMap.values());
-    const savedCount = await saveNaverOrdersToFirestore(orders, "naver-unshipped-orders");
-    const matchResult = await matchNaverOrdersToEstimates(orders, "naver-unshipped-orders");
+
+    // Production Manager는 네이버 데이터를 Supabase에 저장하므로,
+    // bridge=1 요청에서는 기존 Firestore 저장/견적 자동매칭을 건드리지 않습니다.
+    const bridgeOnly = ["1", "true", "yes"].includes(
+      String(req.query.bridge || "").trim().toLowerCase()
+    );
+
+    let savedCount = 0;
+    let matchResult = {
+      matchedCount: 0,
+      candidatesCount: 0,
+      results: []
+    };
+
+    if (!bridgeOnly) {
+      savedCount = await saveNaverOrdersToFirestore(orders, "naver-unshipped-orders");
+      matchResult = await matchNaverOrdersToEstimates(orders, "naver-unshipped-orders");
+    }
 
     res.json({
       ok: true,
       message: "네이버 스마트스토어 배송 전/클레임 주문 조회 성공",
       admin: req.adminUser.email,
+      bridgeOnly,
+      persistence: bridgeOnly ? "skipped" : "firestore",
       query: {
         startDate: startYmd,
         endDate: endYmd,
