@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 const admin = require("firebase-admin");
 
 const app = express();
@@ -52,8 +53,44 @@ function initFirebaseAdmin() {
   firebaseAdminInitialized = true;
 }
 
+// PRODUCTION_MANAGER_INTERNAL_AUTH_V1
+// 기존 Cafe24/Firebase 관리자 인증은 그대로 유지하고,
+// Production Manager 서버는 별도의 내부 키로 같은 API를 사용할 수 있습니다.
+function safeSecretEqual(a, b) {
+  const left = Buffer.from(String(a || ""), "utf8");
+  const right = Buffer.from(String(b || ""), "utf8");
+
+  if (!left.length || left.length !== right.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(left, right);
+}
+
+
 async function requireFirebaseAdmin(req, res, next) {
   try {
+    const configuredInternalKey =
+      process.env.PRODUCTION_MANAGER_INTERNAL_API_KEY || "";
+
+    const suppliedInternalKey =
+      req.headers["x-internal-key"] || "";
+
+    if (
+      configuredInternalKey &&
+      suppliedInternalKey &&
+      safeSecretEqual(configuredInternalKey, suppliedInternalKey)
+    ) {
+      req.adminUser = {
+        uid: "production-manager",
+        email: "production-manager@internal",
+        authType: "internal"
+      };
+
+      return next();
+    }
+
+    // 기존 estimate_admin.html은 아래 Firebase 인증을 그대로 사용합니다.
     initFirebaseAdmin();
 
     const authHeader = req.headers.authorization || "";
@@ -907,7 +944,7 @@ app.get("/", (req, res) => {
     ok: true,
     service: "cnffurdl-order-api",
     message: "출력이 주문 API 서버가 정상 실행 중입니다.",
-    security: "Firebase ID token required for /naver/* endpoints except /naver/env-check",
+    security: "Firebase ID token or Production Manager internal key required for protected endpoints",
     endpoints: [
       "/health",
       "/ip",
@@ -1011,6 +1048,7 @@ app.get("/naver/env-check", (req, res) => {
       FIREBASE_PROJECT_ID: process.env.FIREBASE_PROJECT_ID ? "SET" : "NOT_SET",
       FIREBASE_CLIENT_EMAIL: process.env.FIREBASE_CLIENT_EMAIL ? "SET" : "NOT_SET",
       FIREBASE_PRIVATE_KEY: process.env.FIREBASE_PRIVATE_KEY ? "SET" : "NOT_SET",
+      PRODUCTION_MANAGER_INTERNAL_API_KEY: process.env.PRODUCTION_MANAGER_INTERNAL_API_KEY ? "SET" : "NOT_SET",
       ADMIN_EMAILS: getAdminEmails()
     }
   });
