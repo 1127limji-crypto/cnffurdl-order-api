@@ -954,7 +954,7 @@ app.get("/", (req, res) => {
     security: "Firebase ID token or Production Manager internal key required for protected endpoints",
     bridge: "naver-readonly-v1", // PRODUCTION_MANAGER_NAVER_BRIDGE_V1
     placeOrderStatus: "enabled", // PRODUCTION_MANAGER_PLACE_ORDER_STATUS_V1
-    changedStatusBridge: "v1", // PRODUCTION_MANAGER_CHANGED_STATUS_BRIDGE_V1
+    changedStatusBridge: "v2-windowed", // PRODUCTION_MANAGER_CHANGED_STATUS_BRIDGE_V2
     endpoints: [
       "/health",
       "/ip",
@@ -1530,75 +1530,151 @@ app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
       });
     }
 
+    const windowMs =
+      (23 * 60 + 55) *
+      60 *
+      1000;
+
     const changedRows = [];
-    let cursorFrom = from;
-    let moreSequence = "";
-    let pageCount = 0;
-    let previousCursor = "";
-
-    while (pageCount < 100) {
-      const params = new URLSearchParams();
-      params.set("lastChangedFrom", cursorFrom);
-      params.set("lastChangedTo", to);
-      params.set("limitCount", "300");
-
-      if (moreSequence) {
-        params.set("moreSequence", moreSequence);
-      }
-
-      const result = await naverApiFetch(
-        `/v1/pay-order/seller/product-orders/last-changed-statuses?${params.toString()}`,
-        {
-          method: "GET",
-          type,
-          accountId
-        }
+    let windowStart =
+      new Date(
+        fromDate
       );
+    let windowCount = 0;
+    let totalPageCount = 0;
 
-      const payload = result.data || {};
-      let batch = [];
+    while (
+      windowStart <
+      toDate
+    ) {
+      const windowEnd =
+        new Date(
+          Math.min(
+            windowStart.getTime() +
+            windowMs,
+            toDate.getTime()
+          )
+        );
 
-      if (Array.isArray(payload)) {
-        batch = payload;
-      } else if (Array.isArray(payload.data)) {
-        batch = payload.data;
-      } else {
-        batch = getContentsFromNaverResponse(payload);
+      let cursorFrom =
+        windowStart.toISOString();
+      let moreSequence = "";
+      let previousCursor = "";
+      let pageCount = 0;
+
+      while (
+        pageCount < 100
+      ) {
+        const params =
+          new URLSearchParams();
+
+        params.set(
+          "lastChangedFrom",
+          cursorFrom
+        );
+        params.set(
+          "lastChangedTo",
+          windowEnd.toISOString()
+        );
+        params.set(
+          "limitCount",
+          "300"
+        );
+
+        if (
+          moreSequence
+        ) {
+          params.set(
+            "moreSequence",
+            moreSequence
+          );
+        }
+
+        const result =
+          await naverApiFetch(
+            `/v1/pay-order/seller/product-orders/last-changed-statuses?${params.toString()}`,
+            {
+              method: "GET",
+              type,
+              accountId
+            }
+          );
+
+        const payload =
+          result.data || {};
+        let batch = [];
+
+        if (
+          Array.isArray(payload)
+        ) {
+          batch = payload;
+        } else if (
+          Array.isArray(payload.data)
+        ) {
+          batch = payload.data;
+        } else {
+          batch =
+            getContentsFromNaverResponse(
+              payload
+            );
+        }
+
+        changedRows.push(
+          ...batch
+        );
+
+        const more =
+          (
+            payload &&
+            typeof payload.more === "object" &&
+            payload.more
+          ) ||
+          (
+            payload?.data &&
+            !Array.isArray(payload.data) &&
+            typeof payload.data.more === "object" &&
+            payload.data.more
+          ) ||
+          null;
+
+        pageCount++;
+        totalPageCount++;
+
+        if (
+          !more ||
+          !more.moreFrom
+        ) {
+          break;
+        }
+
+        const nextCursor =
+          `${more.moreFrom}|${more.moreSequence ?? ""}`;
+
+        if (
+          nextCursor ===
+          previousCursor
+        ) {
+          break;
+        }
+
+        previousCursor =
+          nextCursor;
+        cursorFrom =
+          String(
+            more.moreFrom
+          );
+        moreSequence =
+          more.moreSequence !== undefined &&
+          more.moreSequence !== null
+            ? String(
+                more.moreSequence
+              )
+            : "";
       }
 
-      changedRows.push(...batch);
-
-      const more =
-        (
-          payload &&
-          typeof payload.more === "object" &&
-          payload.more
-        ) ||
-        (
-          payload?.data &&
-          !Array.isArray(payload.data) &&
-          typeof payload.data.more === "object" &&
-          payload.data.more
-        ) ||
-        null;
-
-      pageCount++;
-
-      if (!more || !more.moreFrom) {
-        break;
-      }
-
-      const nextCursor = `${more.moreFrom}|${more.moreSequence ?? ""}`;
-      if (nextCursor === previousCursor) {
-        break;
-      }
-
-      previousCursor = nextCursor;
-      cursorFrom = String(more.moreFrom);
-      moreSequence =
-        more.moreSequence !== undefined && more.moreSequence !== null
-          ? String(more.moreSequence)
-          : "";
+      windowCount++;
+      windowStart =
+        windowEnd;
     }
 
     const latestByProductOrder = new Map();
@@ -1723,7 +1799,9 @@ app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
       query: { from, to },
       from,
       to,
-      pageCount,
+      windowCount,
+      pageCount:
+        totalPageCount,
       changedCount: changes.length,
       detailCount: detailRows.length,
       count: orders.length,
