@@ -1822,7 +1822,6 @@ pageCount++;
       bridgeOnly: true,
       persistence: "skipped",
       bridgeVersion: "v3-kst-response",
-      bridgeVersion: "v2-windowed",
       query: {
         from,
         to
