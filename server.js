@@ -954,7 +954,7 @@ app.get("/", (req, res) => {
     security: "Firebase ID token or Production Manager internal key required for protected endpoints",
     bridge: "naver-readonly-v1", // PRODUCTION_MANAGER_NAVER_BRIDGE_V1
     placeOrderStatus: "enabled", // PRODUCTION_MANAGER_PLACE_ORDER_STATUS_V1
-    changedStatusBridge: "v2-windowed", // PRODUCTION_MANAGER_CHANGED_STATUS_BRIDGE_V2
+    changedStatusBridge: "v3-kst-response", // PRODUCTION_MANAGER_CHANGED_STATUS_BRIDGE_V2
     endpoints: [
       "/health",
       "/ip",
@@ -1500,6 +1500,14 @@ app.get("/naver/orders", requireFirebaseAdmin, async (req, res) => {
 // 변경 일시 범위를 24시간보다 짧은 창으로 나누어 조회합니다.
 // 각 창 안에서는 moreFrom / moreSequence pagination을 끝까지 따라갑니다.
 // Firestore 저장/견적 자동매칭은 실행하지 않습니다.
+function formatNaverKstDateTime(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const shifted = new Date(date.getTime() + 9 * 60 * 60 * 1000);
+  return shifted.toISOString().replace("Z", "+09:00");
+}
+
+// PRODUCTION_MANAGER_CHANGED_STATUS_RESPONSE_KST_V1
 app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
   try {
     const type = req.query.type ? String(req.query.type) : undefined;
@@ -1548,7 +1556,7 @@ app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
         )
       );
 
-      let cursorFrom = windowStart.toISOString();
+      let cursorFrom = formatNaverKstDateTime(windowStart);
       let moreSequence = "";
       let previousCursor = "";
       let pageCount = 0;
@@ -1557,7 +1565,7 @@ app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
         const params = new URLSearchParams();
 
         params.set("lastChangedFrom", cursorFrom);
-        params.set("lastChangedTo", windowEnd.toISOString());
+        params.set("lastChangedTo", formatNaverKstDateTime(windowEnd));
         params.set("limitCount", "300");
 
         if (moreSequence) {
@@ -1574,10 +1582,23 @@ app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
         );
 
         const payload = result.data || {};
+
+        const payloadData =
+          payload &&
+          payload.data &&
+          typeof payload.data === "object" &&
+          !Array.isArray(payload.data)
+            ? payload.data
+            : null;
+
         let batch = [];
 
         if (Array.isArray(payload)) {
           batch = payload;
+        } else if (Array.isArray(payload.lastChangeStatuses)) {
+          batch = payload.lastChangeStatuses;
+        } else if (Array.isArray(payloadData?.lastChangeStatuses)) {
+          batch = payloadData.lastChangeStatuses;
         } else if (Array.isArray(payload.data)) {
           batch = payload.data;
         } else {
@@ -1593,14 +1614,12 @@ app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
             payload.more
           ) ||
           (
-            payload?.data &&
-            !Array.isArray(payload.data) &&
-            typeof payload.data.more === "object" &&
-            payload.data.more
+            payloadData &&
+            typeof payloadData.more === "object" &&
+            payloadData.more
           ) ||
           null;
-
-        pageCount++;
+pageCount++;
         totalPageCount++;
 
         if (!more || !more.moreFrom) {
@@ -1802,6 +1821,7 @@ app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
       admin: req.adminUser.email,
       bridgeOnly: true,
       persistence: "skipped",
+      bridgeVersion: "v3-kst-response",
       bridgeVersion: "v2-windowed",
       query: {
         from,
