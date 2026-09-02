@@ -1496,8 +1496,9 @@ app.get("/naver/orders", requireFirebaseAdmin, async (req, res) => {
 
 
 
-// PRODUCTION_MANAGER_CHANGED_STATUS_BRIDGE_V1
-// Production Manager 전용: 결제일이 아니라 마지막 변경 일시 기준으로 조회.
+// PRODUCTION_MANAGER_CHANGED_STATUS_BRIDGE_V2
+// 변경 일시 범위를 24시간보다 짧은 창으로 나누어 조회합니다.
+// 각 창 안에서는 moreFrom / moreSequence pagination을 끝까지 따라갑니다.
 // Firestore 저장/견적 자동매칭은 실행하지 않습니다.
 app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
   try {
@@ -1506,6 +1507,7 @@ app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
 
     const now = new Date();
     const defaultFrom = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
     const from = req.query.from ? String(req.query.from) : defaultFrom.toISOString();
     const to = req.query.to ? String(req.query.to) : now.toISOString();
 
@@ -1523,105 +1525,66 @@ app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
       });
     }
 
-    if (toDate.getTime() - fromDate.getTime() > 31 * 24 * 60 * 60 * 1000) {
+    const maxRangeMs = 31 * 24 * 60 * 60 * 1000;
+    if (toDate.getTime() - fromDate.getTime() > maxRangeMs) {
       return res.status(400).json({
         ok: false,
         message: "변경 상태 조회 범위는 최대 31일입니다."
       });
     }
 
-    const windowMs =
-      (23 * 60 + 55) *
-      60 *
-      1000;
+    const windowMs = (23 * 60 + 55) * 60 * 1000;
 
     const changedRows = [];
-    let windowStart =
-      new Date(
-        fromDate
-      );
+    let windowStart = new Date(fromDate);
     let windowCount = 0;
     let totalPageCount = 0;
 
-    while (
-      windowStart <
-      toDate
-    ) {
-      const windowEnd =
-        new Date(
-          Math.min(
-            windowStart.getTime() +
-            windowMs,
-            toDate.getTime()
-          )
-        );
+    while (windowStart < toDate) {
+      const windowEnd = new Date(
+        Math.min(
+          windowStart.getTime() + windowMs,
+          toDate.getTime()
+        )
+      );
 
-      let cursorFrom =
-        windowStart.toISOString();
+      let cursorFrom = windowStart.toISOString();
       let moreSequence = "";
       let previousCursor = "";
       let pageCount = 0;
 
-      while (
-        pageCount < 100
-      ) {
-        const params =
-          new URLSearchParams();
+      while (pageCount < 100) {
+        const params = new URLSearchParams();
 
-        params.set(
-          "lastChangedFrom",
-          cursorFrom
-        );
-        params.set(
-          "lastChangedTo",
-          windowEnd.toISOString()
-        );
-        params.set(
-          "limitCount",
-          "300"
-        );
+        params.set("lastChangedFrom", cursorFrom);
+        params.set("lastChangedTo", windowEnd.toISOString());
+        params.set("limitCount", "300");
 
-        if (
-          moreSequence
-        ) {
-          params.set(
-            "moreSequence",
-            moreSequence
-          );
+        if (moreSequence) {
+          params.set("moreSequence", moreSequence);
         }
 
-        const result =
-          await naverApiFetch(
-            `/v1/pay-order/seller/product-orders/last-changed-statuses?${params.toString()}`,
-            {
-              method: "GET",
-              type,
-              accountId
-            }
-          );
+        const result = await naverApiFetch(
+          `/v1/pay-order/seller/product-orders/last-changed-statuses?${params.toString()}`,
+          {
+            method: "GET",
+            type,
+            accountId
+          }
+        );
 
-        const payload =
-          result.data || {};
+        const payload = result.data || {};
         let batch = [];
 
-        if (
-          Array.isArray(payload)
-        ) {
+        if (Array.isArray(payload)) {
           batch = payload;
-        } else if (
-          Array.isArray(payload.data)
-        ) {
+        } else if (Array.isArray(payload.data)) {
           batch = payload.data;
         } else {
-          batch =
-            getContentsFromNaverResponse(
-              payload
-            );
+          batch = getContentsFromNaverResponse(payload);
         }
 
-        changedRows.push(
-          ...batch
-        );
+        changedRows.push(...batch);
 
         const more =
           (
@@ -1640,41 +1603,28 @@ app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
         pageCount++;
         totalPageCount++;
 
-        if (
-          !more ||
-          !more.moreFrom
-        ) {
+        if (!more || !more.moreFrom) {
           break;
         }
 
-        const nextCursor =
-          `${more.moreFrom}|${more.moreSequence ?? ""}`;
+        const nextCursor = `${more.moreFrom}|${more.moreSequence ?? ""}`;
 
-        if (
-          nextCursor ===
-          previousCursor
-        ) {
+        if (nextCursor === previousCursor) {
           break;
         }
 
-        previousCursor =
-          nextCursor;
-        cursorFrom =
-          String(
-            more.moreFrom
-          );
+        previousCursor = nextCursor;
+        cursorFrom = String(more.moreFrom);
+
         moreSequence =
           more.moreSequence !== undefined &&
           more.moreSequence !== null
-            ? String(
-                more.moreSequence
-              )
+            ? String(more.moreSequence)
             : "";
       }
 
       windowCount++;
-      windowStart =
-        windowEnd;
+      windowStart = windowEnd;
     }
 
     const latestByProductOrder = new Map();
@@ -1684,15 +1634,18 @@ app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
       if (!productOrderId) continue;
 
       const previous = latestByProductOrder.get(productOrderId);
+
       if (
         !previous ||
-        String(row?.lastChangedDate || "") >= String(previous?.lastChangedDate || "")
+        String(row?.lastChangedDate || "") >=
+          String(previous?.lastChangedDate || "")
       ) {
         latestByProductOrder.set(productOrderId, row);
       }
     }
 
     const changes = Array.from(latestByProductOrder.values());
+
     const ids = changes
       .map((row) => String(row.productOrderId || ""))
       .filter(Boolean);
@@ -1701,23 +1654,60 @@ app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
 
     for (let index = 0; index < ids.length; index += 300) {
       const chunk = ids.slice(index, index + 300);
-      const details = await getProductOrderDetailsByIds(chunk, {
-        type,
-        accountId
-      });
+
+      let details = [];
+
+      if (typeof getProductOrderDetailsByIds === "function") {
+        details = await getProductOrderDetailsByIds(
+          chunk,
+          {
+            type,
+            accountId
+          }
+        );
+      } else {
+        const detailResult = await naverApiFetch(
+          "/v1/pay-order/seller/product-orders/query",
+          {
+            method: "POST",
+            body: {
+              productOrderIds: chunk
+            },
+            type,
+            accountId
+          }
+        );
+
+        const detailPayload = detailResult.data || {};
+
+        if (Array.isArray(detailPayload)) {
+          details = detailPayload;
+        } else if (Array.isArray(detailPayload.data)) {
+          details = detailPayload.data;
+        } else {
+          details = getContentsFromNaverResponse(detailPayload);
+        }
+      }
 
       detailRows.push(...(Array.isArray(details) ? details : []));
     }
 
     const changeMap = new Map(
-      changes.map((row) => [String(row.productOrderId || ""), row])
+      changes.map((row) => [
+        String(row.productOrderId || ""),
+        row
+      ])
     );
 
     const seen = new Set();
 
     const orders = detailRows.map((row) => {
       const simple = extractSimpleOrder(row);
-      const productOrder = row?.productOrder || row?.data?.productOrder || {};
+
+      const productOrder =
+        row?.productOrder ||
+        row?.data?.productOrder ||
+        {};
 
       const productOrderId = String(
         productOrder.productOrderId ||
@@ -1731,8 +1721,14 @@ app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
 
       return {
         ...simple,
-        orderNo: simple.orderNo || change.orderId || "",
-        orderId: simple.orderId || change.orderId || "",
+        orderNo:
+          simple.orderNo ||
+          change.orderId ||
+          "",
+        orderId:
+          simple.orderId ||
+          change.orderId ||
+          "",
         productOrderId,
         productOrderStatus:
           productOrder.productOrderStatus ||
@@ -1757,17 +1753,26 @@ app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
           change.claimStatus ||
           simple.claimStatus ||
           "",
-        lastChangedType: change.lastChangedType || "",
-        lastChangedDate: change.lastChangedDate || "",
-        receiverAddressChanged: Boolean(change.receiverAddressChanged),
-        giftReceivingStatus: change.giftReceivingStatus || ""
+        lastChangedType:
+          change.lastChangedType ||
+          "",
+        lastChangedDate:
+          change.lastChangedDate ||
+          "",
+        receiverAddressChanged:
+          Boolean(change.receiverAddressChanged),
+        giftReceivingStatus:
+          change.giftReceivingStatus ||
+          ""
       };
     });
 
-    // 상세조회가 누락된 ID도 최소 상태는 전달.
     for (const change of changes) {
       const productOrderId = String(change.productOrderId || "");
-      if (!productOrderId || seen.has(productOrderId)) continue;
+
+      if (!productOrderId || seen.has(productOrderId)) {
+        continue;
+      }
 
       orders.push({
         orderNo: String(change.orderId || ""),
@@ -1785,6 +1790,7 @@ app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
     }
 
     const statusCounts = {};
+
     for (const row of orders) {
       const key = String(row.productOrderStatus || "(없음)");
       statusCounts[key] = (statusCounts[key] || 0) + 1;
@@ -1796,12 +1802,15 @@ app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
       admin: req.adminUser.email,
       bridgeOnly: true,
       persistence: "skipped",
-      query: { from, to },
+      bridgeVersion: "v2-windowed",
+      query: {
+        from,
+        to
+      },
       from,
       to,
       windowCount,
-      pageCount:
-        totalPageCount,
+      pageCount: totalPageCount,
       changedCount: changes.length,
       detailCount: detailRows.length,
       count: orders.length,
@@ -1811,9 +1820,13 @@ app.get("/naver/changed-orders", requireFirebaseAdmin, async (req, res) => {
   } catch (error) {
     res.status(error.status || 500).json({
       ok: false,
-      message: error.message,
-      status: error.status || 500,
-      detail: error.data || null
+      message:
+        error.message ||
+        "네이버 커머스API 호출 실패",
+      status:
+        error.status || 500,
+      detail:
+        error.data || null
     });
   }
 });
