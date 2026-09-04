@@ -3232,7 +3232,6 @@ app.get(
             start_date: startDate,
             end_date: today,
             date_type: "pay_date",
-            payment_status: "P,T,A",
             embed: "items,receivers,buyer",
             limit: 1000,
             offset
@@ -3251,11 +3250,19 @@ app.get(
         offset += 1000;
       }
 
-      const items = orders.flatMap(order =>
+      // Cafe24 GET /orders의 payment_status는 P/T/A 각각은 유효하지만
+      // "P,T,A" 다중 문자열은 실제 API에서 422 invalid parameter로 거부됨.
+      // pay_date 범위로 먼저 조회한 뒤 결제완료 계열만 서버에서 안전하게 필터링한다.
+      const paidStatuses = new Set(["P", "T", "A"]);
+      const paidOrders = orders.filter(order =>
+        paidStatuses.has(String(order?.payment_status || ""))
+      );
+
+      const items = paidOrders.flatMap(order =>
         Array.isArray(order?.items) ? order.items : []
       );
 
-      const first = orders[0] || {};
+      const first = paidOrders[0] || {};
       const firstItem = items[0] || {};
       const firstBuyer =
         first?.buyer && typeof first.buyer === "object"
@@ -3271,16 +3278,18 @@ app.get(
         cafe24OrdersPreview: "v2",
         readOnly: true,
         dateType: "pay_date",
-        paymentStatusesRequested: ["P", "T", "A"],
+        paymentFilterMode: "client_side_after_pay_date_query",
+        paymentStatusesAccepted: ["P", "T", "A"],
         days,
         startDate,
         endDate: today,
-        orderCount: orders.length,
+        rawOrderCount: orders.length,
+        orderCount: paidOrders.length,
         itemCount: items.length,
-        orderStatusCounts: cafe24CountBy(orders, "order_status"),
-        paymentStatusCounts: cafe24CountBy(orders, "payment_status"),
-        shippingStatusCounts: cafe24CountBy(orders, "shipping_status"),
-        orderPlaceCounts: cafe24CountBy(orders, "order_place_id"),
+        orderStatusCounts: cafe24CountBy(paidOrders, "order_status"),
+        paymentStatusCounts: cafe24CountBy(paidOrders, "payment_status"),
+        shippingStatusCounts: cafe24CountBy(paidOrders, "shipping_status"),
+        orderPlaceCounts: cafe24CountBy(paidOrders, "order_place_id"),
         schema: {
           orderKeys: Object.keys(first).sort(),
           itemKeys: Object.keys(firstItem).sort(),
