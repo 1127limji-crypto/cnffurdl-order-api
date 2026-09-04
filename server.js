@@ -2886,6 +2886,428 @@ app.get("/cafe24/oauth/status", async (req, res) => {
   }
 });
 
+
+// === CAFE24_V2_TOKEN_REFRESH_PREVIEW_START ===
+//
+// Cafe24 V2
+// - encrypted token decrypt
+// - refresh token rotation
+// - access token auto refresh
+// - paid order read-only preview
+// - preview response contains only counts/status/schema keys, no PII
+//
+
+let cafe24RefreshInFlight = null;
+
+function cafe24DecryptJson(payload, rawKey) {
+  if (!payload || payload.algorithm !== "aes-256-gcm") {
+    throw new Error("Cafe24 저장 토큰 암호문 형식이 올바르지 않습니다.");
+  }
+
+  const key = cafe24TokenKey(rawKey);
+  const iv = Buffer.from(String(payload.iv || ""), "base64");
+  const tag = Buffer.from(String(payload.tag || ""), "base64");
+  const encrypted = Buffer.from(String(payload.data || ""), "base64");
+
+  const decipher = cafe24Crypto.createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAuthTag(tag);
+
+  const plain = Buffer.concat([
+    decipher.update(encrypted),
+    decipher.final()
+  ]).toString("utf8");
+
+  return JSON.parse(plain);
+}
+
+function cafe24ParseApiTime(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return 0;
+
+  // Cafe24 token timestamps may be returned without timezone.
+  // The app is configured for Asia/Seoul, so interpret timezone-less values as +09:00.
+  const normalized =
+    /(?:Z|[+-]\d{2}:\d{2})$/i.test(raw)
+      ? raw
+      : `${raw}+09:00`;
+
+  const ms = Date.parse(normalized);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+async function cafe24LoadTokenState() {
+  const c = cafe24RequireConfig();
+
+  initFirebaseAdmin();
+  const db = admin.firestore();
+
+  const ref = db
+    .collection(CAFE24_TOKEN_DOC_COLLECTION)
+    .doc(CAFE24_TOKEN_DOC_ID);
+
+  const snap = await ref.get();
+
+  if (!snap.exists) {
+    const error = new Error(
+      "Cafe24 OAuth 토큰이 저장되어 있지 않습니다. OAuth 승인을 먼저 진행해주세요."
+    );
+    error.code = "CAFE24_TOKEN_NOT_STORED";
+    throw error;
+  }
+
+  const meta = snap.data() || {};
+  const token = cafe24DecryptJson(meta.tokenCipher, c.tokenKey);
+
+  if (!token?.access_token || !token?.refresh_token) {
+    const error = new Error("Cafe24 저장 토큰이 불완전합니다.");
+    error.code = "CAFE24_TOKEN_INCOMPLETE";
+    throw error;
+  }
+
+  return { c, db, ref, meta, token };
+}
+
+async function cafe24PersistToken(ref, c, token) {
+  const scopes = Array.isArray(token.scopes)
+    ? token.scopes.map(String)
+    : String(token.scope || "")
+        .split(/\s+/)
+        .filter(Boolean);
+
+  const encrypted = cafe24EncryptJson(
+    {
+      access_token: token.access_token,
+      refresh_token: token.refresh_token,
+      token_type: token.token_type || "Bearer",
+      issued_at: token.issued_at || null,
+      expires_at: token.expires_at || null,
+      refresh_token_expires_at: token.refresh_token_expires_at || null,
+      scopes
+    },
+    c.tokenKey
+  );
+
+  await ref.set(
+    {
+      integration: "cafe24",
+      mallId: token.mall_id || c.mallId,
+      userId: token.user_id || null,
+      shopNo: token.shop_no || null,
+      scopes,
+      expiresAt: token.expires_at || null,
+      refreshTokenExpiresAt: token.refresh_token_expires_at || null,
+      tokenCipher: encrypted,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    },
+    { merge: true }
+  );
+
+  return scopes;
+}
+
+async function cafe24RefreshTokenNow() {
+  if (cafe24RefreshInFlight) {
+    return cafe24RefreshInFlight;
+  }
+
+  cafe24RefreshInFlight = (async () => {
+    const { c, ref, token } = await cafe24LoadTokenState();
+
+    const basicAuth = Buffer
+      .from(`${c.clientId}:${c.clientSecret}`, "utf8")
+      .toString("base64");
+
+    const form = new URLSearchParams();
+    form.set("grant_type", "refresh_token");
+    form.set("refresh_token", token.refresh_token);
+
+    const response = await fetch(
+      `https://${encodeURIComponent(c.mallId)}.cafe24api.com/api/v2/oauth/token`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Basic ${basicAuth}`,
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        body: form.toString()
+      }
+    );
+
+    const next = await response.json().catch(() => ({}));
+
+    if (
+      !response.ok ||
+      !next?.access_token ||
+      !next?.refresh_token
+    ) {
+      const error = new Error(
+        next?.error_description ||
+        next?.message ||
+        next?.error?.message ||
+        next?.error ||
+        `Cafe24 토큰 갱신 실패 (HTTP ${response.status})`
+      );
+      error.code = "CAFE24_REFRESH_FAILED";
+      throw error;
+    }
+
+    const scopes = Array.isArray(next.scopes)
+      ? next.scopes
+      : [];
+
+    if (scopes.length && !scopes.includes(CAFE24_SCOPE)) {
+      const error = new Error(
+        `갱신된 토큰에 필수 권한 ${CAFE24_SCOPE}가 없습니다.`
+      );
+      error.code = "CAFE24_REFRESH_SCOPE_MISSING";
+      throw error;
+    }
+
+    await cafe24PersistToken(ref, c, next);
+
+    return {
+      token: next,
+      refreshed: true
+    };
+  })();
+
+  try {
+    return await cafe24RefreshInFlight;
+  } finally {
+    cafe24RefreshInFlight = null;
+  }
+}
+
+async function cafe24GetValidToken(forceRefresh = false) {
+  const state = await cafe24LoadTokenState();
+  const expiresMs = cafe24ParseApiTime(state.token.expires_at);
+
+  const refreshSoon =
+    !expiresMs ||
+    expiresMs - Date.now() < 10 * 60 * 1000;
+
+  if (forceRefresh || refreshSoon) {
+    return cafe24RefreshTokenNow();
+  }
+
+  return {
+    token: state.token,
+    refreshed: false
+  };
+}
+
+async function cafe24ApiGet(pathname, params = {}) {
+  async function call(forceRefresh) {
+    const current = await cafe24GetValidToken(forceRefresh);
+    const c = cafe24RequireConfig();
+
+    const url = new URL(
+      `https://${encodeURIComponent(c.mallId)}.cafe24api.com${pathname}`
+    );
+
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== null && value !== "") {
+        url.searchParams.set(key, String(value));
+      }
+    }
+
+    const response = await fetch(url, {
+      headers: {
+        "Authorization": `Bearer ${current.token.access_token}`,
+        "Content-Type": "application/json"
+      }
+    });
+
+    const json = await response.json().catch(() => ({}));
+
+    return {
+      response,
+      json,
+      refreshed: current.refreshed
+    };
+  }
+
+  let result = await call(false);
+
+  // Access token rejection: refresh exactly once, then retry.
+  if (result.response.status === 401) {
+    result = await call(true);
+  }
+
+  if (!result.response.ok) {
+    const error = new Error(
+      result.json?.error?.message ||
+      result.json?.message ||
+      result.json?.error_description ||
+      result.json?.error ||
+      `Cafe24 API 실패 (HTTP ${result.response.status})`
+    );
+    error.code = "CAFE24_API_FAILED";
+    error.httpStatus = result.response.status;
+    throw error;
+  }
+
+  return result;
+}
+
+function cafe24KstDateKey(date) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
+}
+
+function cafe24ShiftDateKey(key, days) {
+  const date = new Date(`${key}T12:00:00+09:00`);
+  date.setDate(date.getDate() + days);
+  return cafe24KstDateKey(date);
+}
+
+function cafe24CountBy(rows, key) {
+  const out = {};
+  for (const row of rows) {
+    const value = String(row?.[key] ?? "(null)");
+    out[value] = (out[value] || 0) + 1;
+  }
+  return out;
+}
+
+app.post(
+  "/cafe24/token-refresh-test",
+  requireFirebaseAdmin,
+  async (req, res) => {
+    try {
+      const result = await cafe24RefreshTokenNow();
+      const token = result.token || {};
+
+      return res.json({
+        ok: true,
+        cafe24TokenRefresh: "v2",
+        refreshed: true,
+        mallId: token.mall_id || cafe24Config().mallId,
+        scopes: token.scopes || [],
+        expiresAt: token.expires_at || null,
+        refreshTokenExpiresAt:
+          token.refresh_token_expires_at || null,
+        tokenExposed: false
+      });
+    } catch (error) {
+      console.error(
+        "[cafe24 token refresh test]",
+        error?.code || error?.message
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error: error?.message || "Cafe24 토큰 갱신 테스트 실패"
+      });
+    }
+  }
+);
+
+app.get(
+  "/cafe24/orders-preview",
+  requireFirebaseAdmin,
+  async (req, res) => {
+    try {
+      const days = Math.max(
+        1,
+        Math.min(30, Math.trunc(Number(req.query.days || 7)))
+      );
+
+      const today = cafe24KstDateKey(new Date());
+      const startDate = cafe24ShiftDateKey(today, -(days - 1));
+
+      const orders = [];
+      let offset = 0;
+      let anyRefresh = false;
+
+      while (offset <= 15000) {
+        const result = await cafe24ApiGet(
+          "/api/v2/admin/orders",
+          {
+            shop_no: 1,
+            start_date: startDate,
+            end_date: today,
+            date_type: "pay_date",
+            payment_status: "P,T,A",
+            embed: "items,receivers,buyer",
+            limit: 1000,
+            offset
+          }
+        );
+
+        anyRefresh = anyRefresh || result.refreshed;
+
+        const batch = Array.isArray(result.json?.orders)
+          ? result.json.orders
+          : [];
+
+        orders.push(...batch);
+
+        if (batch.length < 1000) break;
+        offset += 1000;
+      }
+
+      const items = orders.flatMap(order =>
+        Array.isArray(order?.items) ? order.items : []
+      );
+
+      const first = orders[0] || {};
+      const firstItem = items[0] || {};
+      const firstBuyer =
+        first?.buyer && typeof first.buyer === "object"
+          ? first.buyer
+          : {};
+      const firstReceiver =
+        Array.isArray(first?.receivers)
+          ? first.receivers[0] || {}
+          : {};
+
+      return res.json({
+        ok: true,
+        cafe24OrdersPreview: "v2",
+        readOnly: true,
+        dateType: "pay_date",
+        paymentStatusesRequested: ["P", "T", "A"],
+        days,
+        startDate,
+        endDate: today,
+        orderCount: orders.length,
+        itemCount: items.length,
+        orderStatusCounts: cafe24CountBy(orders, "order_status"),
+        paymentStatusCounts: cafe24CountBy(orders, "payment_status"),
+        shippingStatusCounts: cafe24CountBy(orders, "shipping_status"),
+        orderPlaceCounts: cafe24CountBy(orders, "order_place_id"),
+        schema: {
+          orderKeys: Object.keys(first).sort(),
+          itemKeys: Object.keys(firstItem).sort(),
+          buyerKeys: Object.keys(firstBuyer).sort(),
+          receiverKeys: Object.keys(firstReceiver).sort()
+        },
+        tokenAutoRefreshedDuringRead: anyRefresh,
+        piiReturned: false
+      });
+    } catch (error) {
+      console.error(
+        "[cafe24 orders preview]",
+        error?.code || error?.message
+      );
+
+      return res.status(
+        Number(error?.httpStatus) || 500
+      ).json({
+        ok: false,
+        error: error?.message || "Cafe24 주문 미리보기 실패"
+      });
+    }
+  }
+);
+
+// === CAFE24_V2_TOKEN_REFRESH_PREVIEW_END ===
+
 // === CAFE24_OAUTH_GATEWAY_V1_END ===
 
 app.listen(PORT, () => {
