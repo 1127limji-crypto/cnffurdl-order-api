@@ -2667,12 +2667,17 @@ app.get("/cafe24/oauth/callback", async (req, res) => {
     form.set("grant_type", "authorization_code");
     form.set("code", code);
     form.set("redirect_uri", c.redirectUri);
-    form.set("client_id", c.clientId);
-    form.set("client_secret", c.clientSecret);
+
+    // Cafe24 OAuth token endpoint client authentication:
+    // Authorization: Basic base64(client_id:client_secret)
+    const basicAuth = Buffer
+      .from(`${c.clientId}:${c.clientSecret}`, "utf8")
+      .toString("base64");
 
     const response = await fetch(tokenUrl, {
       method: "POST",
       headers: {
+        "Authorization": `Basic ${basicAuth}`,
         "Content-Type": "application/x-www-form-urlencoded"
       },
       body: form.toString()
