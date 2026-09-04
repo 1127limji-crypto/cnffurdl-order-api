@@ -2596,13 +2596,36 @@ app.get("/cafe24/env-check", (req, res) => {
   const status = cafe24ConfigStatus();
   const c = cafe24Config();
 
+  const fp = (value) =>
+    cafe24Crypto
+      .createHash("sha256")
+      .update(String(value || ""), "utf8")
+      .digest("hex")
+      .slice(0, 12);
+
   res.json({
     ok: true,
-    cafe24OAuthGateway: "v1",
+    cafe24OAuthGateway: "v1-r2",
     configured: status,
     mallId: c.mallId || null,
     redirectUri: c.redirectUri || null,
     scope: CAFE24_SCOPE,
+    fingerprints: {
+      mallId: fp(c.mallId),
+      clientId: fp(c.clientId),
+      clientSecret: fp(c.clientSecret),
+      redirectUri: fp(c.redirectUri),
+      stateSecret: fp(c.stateSecret),
+      tokenKey: fp(c.tokenKey)
+    },
+    lengths: {
+      mallId: c.mallId.length,
+      clientId: c.clientId.length,
+      clientSecret: c.clientSecret.length,
+      redirectUri: c.redirectUri.length,
+      stateSecret: c.stateSecret.length,
+      tokenKey: c.tokenKey.length
+    },
     secretsExposed: false
   });
 });
@@ -2686,17 +2709,35 @@ app.get("/cafe24/oauth/callback", async (req, res) => {
     const token = await response.json().catch(() => ({}));
 
     if (!response.ok || !token?.access_token || !token?.refresh_token) {
-      console.error("[cafe24 oauth token] HTTP", response.status, {
-        error: token?.error || null,
-        error_description: token?.error_description || null
-      });
+      const safeDetail = {
+        httpStatus: response.status,
+        error: token?.error || token?.code || token?.error_code || null,
+        errorDescription:
+          token?.error_description ||
+          token?.message ||
+          token?.error?.message ||
+          null,
+        moreInfo:
+          token?.more_info ||
+          token?.error?.more_info ||
+          null,
+        hasCode: Boolean(code),
+        codeLength: code.length,
+        redirectUri: c.redirectUri,
+        redirectUriLength: c.redirectUri.length,
+        clientIdLength: c.clientId.length,
+        clientSecretLength: c.clientSecret.length
+      };
+
+      console.error("[cafe24 oauth token safe diagnostic]", safeDetail);
+
       const error = new Error(
-        token?.error_description ||
-        token?.message ||
-        token?.error ||
+        safeDetail.errorDescription ||
+        safeDetail.error ||
         `Cafe24 토큰 발급 실패 (HTTP ${response.status})`
       );
       error.code = "CAFE24_TOKEN_EXCHANGE_FAILED";
+      error.safeDetail = safeDetail;
       throw error;
     }
 
@@ -2765,6 +2806,20 @@ app.get("/cafe24/oauth/callback", async (req, res) => {
       );
   } catch (error) {
     console.error("[cafe24 oauth callback]", error?.code || error?.message);
+
+    const safe = error?.safeDetail || {};
+    const diagnostic = error?.safeDetail
+      ? `<hr style="border:0;border-top:1px solid #e4e8eb;margin:20px 0">
+         <p class="muted"><strong>안전 진단정보</strong></p>
+         <p class="muted">HTTP: <code>${String(safe.httpStatus || "-")}</code></p>
+         <p class="muted">Error: <code>${String(safe.error || "-")}</code></p>
+         <p class="muted">More info: <code>${String(safe.moreInfo || "-")}</code></p>
+         <p class="muted">code length: <code>${String(safe.codeLength || 0)}</code></p>
+         <p class="muted">redirect URI length: <code>${String(safe.redirectUriLength || 0)}</code></p>
+         <p class="muted">client ID length: <code>${String(safe.clientIdLength || 0)}</code></p>
+         <p class="muted">client secret length: <code>${String(safe.clientSecretLength || 0)}</code></p>`
+      : "";
+
     return res
       .status(500)
       .type("html")
@@ -2773,6 +2828,7 @@ app.get("/cafe24/oauth/callback", async (req, res) => {
           "Cafe24 OAuth 연결 실패",
           `<h1 class="bad">Cafe24 OAuth 연결에 실패했습니다.</h1>
            <p class="muted">${String(error?.message || "알 수 없는 오류")}</p>
+           ${diagnostic}
            <p class="muted">Client Secret이나 token 원문은 이 화면에 표시하지 않습니다.</p>`
         )
       );
