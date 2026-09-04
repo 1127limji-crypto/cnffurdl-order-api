@@ -2413,6 +2413,420 @@ app.post("/naver/confirm-order", requireFirebaseAdmin, async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 
+
+// === CAFE24_OAUTH_GATEWAY_V1_START ===
+//
+// Cafe24 OAuth gateway V1
+// - 주문 읽기 scope(mall.read_order)만 요청
+// - Client Secret / token을 응답에 노출하지 않음
+// - OAuth state는 HMAC 검증
+// - access/refresh token은 AES-256-GCM으로 암호화해 Firestore에 저장
+// - 기존 Naver / estimate endpoint는 변경하지 않음
+//
+const cafe24Crypto = require("crypto");
+
+const CAFE24_SCOPE = "mall.read_order";
+const CAFE24_TOKEN_DOC_COLLECTION = "systemIntegrations";
+const CAFE24_TOKEN_DOC_ID = "cafe24Oauth";
+
+function cafe24Config() {
+  return {
+    mallId: String(process.env.CAFE24_MALL_ID || "").trim(),
+    clientId: String(process.env.CAFE24_CLIENT_ID || "").trim(),
+    clientSecret: String(process.env.CAFE24_CLIENT_SECRET || "").trim(),
+    redirectUri: String(process.env.CAFE24_REDIRECT_URI || "").trim(),
+    stateSecret: String(process.env.CAFE24_OAUTH_STATE_SECRET || "").trim(),
+    tokenKey: String(process.env.CAFE24_TOKEN_ENCRYPTION_KEY || "").trim()
+  };
+}
+
+function cafe24ConfigStatus() {
+  const c = cafe24Config();
+  return {
+    mallId: Boolean(c.mallId),
+    clientId: Boolean(c.clientId),
+    clientSecret: Boolean(c.clientSecret),
+    redirectUri: Boolean(c.redirectUri),
+    stateSecret: Boolean(c.stateSecret),
+    tokenEncryptionKey: Boolean(c.tokenKey),
+    ready:
+      Boolean(c.mallId) &&
+      Boolean(c.clientId) &&
+      Boolean(c.clientSecret) &&
+      Boolean(c.redirectUri) &&
+      Boolean(c.stateSecret) &&
+      Boolean(c.tokenKey)
+  };
+}
+
+function cafe24TokenKey(raw) {
+  let key = null;
+
+  if (/^[0-9a-fA-F]{64}$/.test(raw)) {
+    key = Buffer.from(raw, "hex");
+  } else {
+    try {
+      const decoded = Buffer.from(raw, "base64");
+      if (decoded.length === 32) key = decoded;
+    } catch (_) {}
+  }
+
+  if (!key || key.length !== 32) {
+    const error = new Error(
+      "CAFE24_TOKEN_ENCRYPTION_KEY는 32바이트 키(64자리 hex 또는 32바이트 base64)여야 합니다."
+    );
+    error.code = "CAFE24_TOKEN_KEY_INVALID";
+    throw error;
+  }
+
+  return key;
+}
+
+function cafe24RequireConfig() {
+  const c = cafe24Config();
+  const missing = [];
+
+  if (!c.mallId) missing.push("CAFE24_MALL_ID");
+  if (!c.clientId) missing.push("CAFE24_CLIENT_ID");
+  if (!c.clientSecret) missing.push("CAFE24_CLIENT_SECRET");
+  if (!c.redirectUri) missing.push("CAFE24_REDIRECT_URI");
+  if (!c.stateSecret) missing.push("CAFE24_OAUTH_STATE_SECRET");
+  if (!c.tokenKey) missing.push("CAFE24_TOKEN_ENCRYPTION_KEY");
+
+  if (missing.length) {
+    const error = new Error(`Cafe24 환경변수 미설정: ${missing.join(", ")}`);
+    error.code = "CAFE24_ENV_MISSING";
+    throw error;
+  }
+
+  if (!/^https:\/\//i.test(c.redirectUri)) {
+    const error = new Error("CAFE24_REDIRECT_URI는 https:// 이어야 합니다.");
+    error.code = "CAFE24_REDIRECT_URI_INVALID";
+    throw error;
+  }
+
+  if (c.stateSecret.length < 32) {
+    const error = new Error("CAFE24_OAUTH_STATE_SECRET는 32자 이상이어야 합니다.");
+    error.code = "CAFE24_STATE_SECRET_WEAK";
+    throw error;
+  }
+
+  cafe24TokenKey(c.tokenKey);
+  return c;
+}
+
+function cafe24MakeState(secret) {
+  const issuedAt = Date.now();
+  const nonce = cafe24Crypto.randomBytes(18).toString("hex");
+  const payload = `${issuedAt}.${nonce}`;
+  const sig = cafe24Crypto
+    .createHmac("sha256", secret)
+    .update(payload)
+    .digest("hex");
+
+  return Buffer.from(`${payload}.${sig}`, "utf8").toString("base64url");
+}
+
+function cafe24VerifyState(state, secret) {
+  try {
+    const decoded = Buffer.from(String(state || ""), "base64url").toString("utf8");
+    const parts = decoded.split(".");
+    if (parts.length !== 3) return false;
+
+    const [issuedAtRaw, nonce, sig] = parts;
+    const issuedAt = Number(issuedAtRaw);
+
+    if (!Number.isFinite(issuedAt)) return false;
+    if (!nonce || !sig) return false;
+    if (Math.abs(Date.now() - issuedAt) > 10 * 60 * 1000) return false;
+
+    const payload = `${issuedAtRaw}.${nonce}`;
+    const expected = cafe24Crypto
+      .createHmac("sha256", secret)
+      .update(payload)
+      .digest("hex");
+
+    const a = Buffer.from(sig, "hex");
+    const b = Buffer.from(expected, "hex");
+
+    return a.length === b.length && cafe24Crypto.timingSafeEqual(a, b);
+  } catch (_) {
+    return false;
+  }
+}
+
+function cafe24EncryptJson(value, rawKey) {
+  const key = cafe24TokenKey(rawKey);
+  const iv = cafe24Crypto.randomBytes(12);
+  const cipher = cafe24Crypto.createCipheriv("aes-256-gcm", key, iv);
+
+  const plaintext = Buffer.from(JSON.stringify(value), "utf8");
+  const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const tag = cipher.getAuthTag();
+
+  return {
+    version: 1,
+    algorithm: "aes-256-gcm",
+    iv: iv.toString("base64"),
+    tag: tag.toString("base64"),
+    data: encrypted.toString("base64")
+  };
+}
+
+function cafe24SafeHtml(title, body) {
+  return `<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${title}</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f6f8;color:#202428;margin:0;padding:40px}
+.card{max-width:680px;margin:0 auto;background:#fff;border:1px solid #e0e5e9;border-radius:16px;padding:28px;box-shadow:0 12px 35px rgba(0,0,0,.06)}
+h1{font-size:22px;margin:0 0 12px}.muted{color:#727b84;font-size:14px;line-height:1.6}
+.ok{color:#21844a;font-weight:800}.bad{color:#b13d32;font-weight:800}
+code{background:#f2f4f6;padding:3px 6px;border-radius:6px}
+</style>
+</head>
+<body><div class="card">${body}</div></body>
+</html>`;
+}
+
+app.get("/cafe24/env-check", (req, res) => {
+  const status = cafe24ConfigStatus();
+  const c = cafe24Config();
+
+  res.json({
+    ok: true,
+    cafe24OAuthGateway: "v1",
+    configured: status,
+    mallId: c.mallId || null,
+    redirectUri: c.redirectUri || null,
+    scope: CAFE24_SCOPE,
+    secretsExposed: false
+  });
+});
+
+app.get("/cafe24/oauth/start", (req, res) => {
+  try {
+    const c = cafe24RequireConfig();
+    const state = cafe24MakeState(c.stateSecret);
+
+    const authUrl = new URL(
+      `https://${encodeURIComponent(c.mallId)}.cafe24api.com/api/v2/oauth/authorize`
+    );
+
+    authUrl.searchParams.set("response_type", "code");
+    authUrl.searchParams.set("client_id", c.clientId);
+    authUrl.searchParams.set("state", state);
+    authUrl.searchParams.set("redirect_uri", c.redirectUri);
+    authUrl.searchParams.set("scope", CAFE24_SCOPE);
+
+    return res.redirect(302, authUrl.toString());
+  } catch (error) {
+    console.error("[cafe24 oauth start]", error?.code || error?.message);
+    return res
+      .status(500)
+      .type("html")
+      .send(
+        cafe24SafeHtml(
+          "Cafe24 OAuth 시작 실패",
+          `<h1 class="bad">Cafe24 OAuth를 시작할 수 없습니다.</h1>
+           <p class="muted">${String(error?.message || "환경설정을 확인해주세요.")}</p>`
+        )
+      );
+  }
+});
+
+app.get("/cafe24/oauth/callback", async (req, res) => {
+  try {
+    const c = cafe24RequireConfig();
+
+    const oauthError = String(req.query.error || "").trim();
+    if (oauthError) {
+      throw new Error(`Cafe24 권한승인이 취소되었거나 실패했습니다: ${oauthError}`);
+    }
+
+    const code = String(req.query.code || "").trim();
+    const state = String(req.query.state || "").trim();
+
+    if (!code) {
+      throw new Error("Cafe24 인증코드(code)가 없습니다.");
+    }
+
+    if (!cafe24VerifyState(state, c.stateSecret)) {
+      const error = new Error("OAuth state 검증에 실패했습니다. 인증을 처음부터 다시 진행해주세요.");
+      error.code = "CAFE24_STATE_INVALID";
+      throw error;
+    }
+
+    const tokenUrl =
+      `https://${encodeURIComponent(c.mallId)}.cafe24api.com/api/v2/oauth/token`;
+
+    const form = new URLSearchParams();
+    form.set("grant_type", "authorization_code");
+    form.set("code", code);
+    form.set("redirect_uri", c.redirectUri);
+    form.set("client_id", c.clientId);
+    form.set("client_secret", c.clientSecret);
+
+    const response = await fetch(tokenUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: form.toString()
+    });
+
+    const token = await response.json().catch(() => ({}));
+
+    if (!response.ok || !token?.access_token || !token?.refresh_token) {
+      console.error("[cafe24 oauth token] HTTP", response.status, {
+        error: token?.error || null,
+        error_description: token?.error_description || null
+      });
+      const error = new Error(
+        token?.error_description ||
+        token?.message ||
+        token?.error ||
+        `Cafe24 토큰 발급 실패 (HTTP ${response.status})`
+      );
+      error.code = "CAFE24_TOKEN_EXCHANGE_FAILED";
+      throw error;
+    }
+
+    const scopes = Array.isArray(token.scopes)
+      ? token.scopes.map(String)
+      : String(token.scope || "")
+          .split(/\s+/)
+          .filter(Boolean);
+
+    if (!scopes.includes(CAFE24_SCOPE)) {
+      const error = new Error(
+        `필수 주문 읽기 권한(${CAFE24_SCOPE})이 승인되지 않았습니다.`
+      );
+      error.code = "CAFE24_SCOPE_MISSING";
+      throw error;
+    }
+
+    initFirebaseAdmin();
+    const db = admin.firestore();
+
+    const encrypted = cafe24EncryptJson(
+      {
+        access_token: token.access_token,
+        refresh_token: token.refresh_token,
+        token_type: token.token_type || "Bearer",
+        issued_at: token.issued_at || null,
+        expires_at: token.expires_at || null,
+        refresh_token_expires_at: token.refresh_token_expires_at || null,
+        scopes
+      },
+      c.tokenKey
+    );
+
+    await db
+      .collection(CAFE24_TOKEN_DOC_COLLECTION)
+      .doc(CAFE24_TOKEN_DOC_ID)
+      .set(
+        {
+          integration: "cafe24",
+          mallId: token.mall_id || c.mallId,
+          userId: token.user_id || null,
+          shopNo: token.shop_no || null,
+          scopes,
+          expiresAt: token.expires_at || null,
+          refreshTokenExpiresAt: token.refresh_token_expires_at || null,
+          tokenCipher: encrypted,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        },
+        { merge: true }
+      );
+
+    return res
+      .status(200)
+      .type("html")
+      .send(
+        cafe24SafeHtml(
+          "Cafe24 OAuth 연결 완료",
+          `<h1 class="ok">Cafe24 주문 읽기 권한 연결 완료</h1>
+           <p class="muted">Mall ID: <code>${String(token.mall_id || c.mallId)}</code></p>
+           <p class="muted">Scope: <code>${scopes.join(" ")}</code></p>
+           <p class="muted">Access Token 만료: <code>${String(token.expires_at || "-")}</code></p>
+           <p class="muted">Refresh Token 만료: <code>${String(token.refresh_token_expires_at || "-")}</code></p>
+           <p class="muted">토큰 원문은 화면/로그에 표시하지 않았고 서버 저장소에 암호화해 저장했습니다.</p>
+           <p class="muted"><strong>이 창의 결과 화면만 캡처해서 ChatGPT에 보내주세요.</strong></p>`
+        )
+      );
+  } catch (error) {
+    console.error("[cafe24 oauth callback]", error?.code || error?.message);
+    return res
+      .status(500)
+      .type("html")
+      .send(
+        cafe24SafeHtml(
+          "Cafe24 OAuth 연결 실패",
+          `<h1 class="bad">Cafe24 OAuth 연결에 실패했습니다.</h1>
+           <p class="muted">${String(error?.message || "알 수 없는 오류")}</p>
+           <p class="muted">Client Secret이나 token 원문은 이 화면에 표시하지 않습니다.</p>`
+        )
+      );
+  }
+});
+
+app.get("/cafe24/oauth/status", async (req, res) => {
+  try {
+    const status = cafe24ConfigStatus();
+    const c = cafe24Config();
+
+    let tokenStored = false;
+    let tokenMeta = null;
+
+    if (status.ready) {
+      initFirebaseAdmin();
+      const snap = await admin
+        .firestore()
+        .collection(CAFE24_TOKEN_DOC_COLLECTION)
+        .doc(CAFE24_TOKEN_DOC_ID)
+        .get();
+
+      tokenStored = snap.exists;
+
+      if (snap.exists) {
+        const data = snap.data() || {};
+        tokenMeta = {
+          mallId: data.mallId || null,
+          userId: data.userId || null,
+          shopNo: data.shopNo || null,
+          scopes: data.scopes || [],
+          expiresAt: data.expiresAt || null,
+          refreshTokenExpiresAt: data.refreshTokenExpiresAt || null
+        };
+      }
+    }
+
+    return res.json({
+      ok: true,
+      cafe24OAuthGateway: "v1",
+      configured: status,
+      mallId: c.mallId || null,
+      redirectUri: c.redirectUri || null,
+      requiredScope: CAFE24_SCOPE,
+      tokenStored,
+      tokenMeta,
+      secretsExposed: false
+    });
+  } catch (error) {
+    console.error("[cafe24 oauth status]", error?.code || error?.message);
+    return res.status(500).json({
+      ok: false,
+      error: error?.message || "Cafe24 OAuth 상태 확인 실패"
+    });
+  }
+});
+
+// === CAFE24_OAUTH_GATEWAY_V1_END ===
+
 app.listen(PORT, () => {
   console.log(`cnffurdl-order-api running on port ${PORT}`);
 });
