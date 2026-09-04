@@ -3317,6 +3317,142 @@ app.get(
 
 // === CAFE24_V2_TOKEN_REFRESH_PREVIEW_END ===
 
+
+// === CAFE24_V2_2_PAID_SCHEMA_DIAGNOSTIC_START ===
+//
+// Cafe24 V2.2 read-only diagnostic
+// - pay_date 범위 주문을 payment_status로 추가 필터링하지 않음
+// - 공식 Orders property의 paid(T/F/M) / canceled(T/F/M) 기준 분포 확인
+// - raw order/item/buyer/receiver field key 확인
+// - 개인정보 값은 응답하지 않음
+//
+
+app.get(
+  "/cafe24/orders-preview-v2",
+  requireFirebaseAdmin,
+  async (req, res) => {
+    try {
+      const days = Math.max(
+        1,
+        Math.min(30, Math.trunc(Number(req.query.days || 7)))
+      );
+
+      const today = cafe24KstDateKey(new Date());
+      const startDate = cafe24ShiftDateKey(today, -(days - 1));
+
+      const orders = [];
+      let offset = 0;
+      let anyRefresh = false;
+
+      while (offset <= 15000) {
+        const result = await cafe24ApiGet(
+          "/api/v2/admin/orders",
+          {
+            shop_no: 1,
+            start_date: startDate,
+            end_date: today,
+            date_type: "pay_date",
+            embed: "items,receivers,buyer",
+            limit: 1000,
+            offset
+          }
+        );
+
+        anyRefresh = anyRefresh || result.refreshed;
+
+        const batch = Array.isArray(result.json?.orders)
+          ? result.json.orders
+          : [];
+
+        orders.push(...batch);
+
+        if (batch.length < 1000) break;
+        offset += 1000;
+      }
+
+      const items = orders.flatMap(order =>
+        Array.isArray(order?.items) ? order.items : []
+      );
+
+      const first = orders[0] || {};
+      const firstItem = items[0] || {};
+      const firstBuyer =
+        first?.buyer && typeof first.buyer === "object"
+          ? first.buyer
+          : {};
+      const firstReceiver =
+        Array.isArray(first?.receivers)
+          ? first.receivers[0] || {}
+          : {};
+
+      const safeSamples = orders.slice(0, 5).map(order => ({
+        paid: order?.paid ?? null,
+        canceled: order?.canceled ?? null,
+        orderStatus: order?.order_status ?? null,
+        paymentStatus: order?.payment_status ?? null,
+        shippingStatus: order?.shipping_status ?? null,
+        hasPaymentDate: Boolean(order?.payment_date),
+        itemCount: Array.isArray(order?.items) ? order.items.length : 0,
+        receiverCount: Array.isArray(order?.receivers)
+          ? order.receivers.length
+          : 0,
+        hasBuyerObject:
+          Boolean(order?.buyer) &&
+          typeof order.buyer === "object"
+      }));
+
+      return res.json({
+        ok: true,
+        cafe24OrdersPreview: "v2.2",
+        readOnly: true,
+        query: {
+          dateType: "pay_date",
+          days,
+          startDate,
+          endDate: today,
+          paymentStatusParameterUsed: false
+        },
+        orderCount: orders.length,
+        itemCount: items.length,
+        paidFlagCounts: cafe24CountBy(orders, "paid"),
+        canceledFlagCounts: cafe24CountBy(orders, "canceled"),
+        orderStatusCounts: cafe24CountBy(orders, "order_status"),
+        paymentStatusCounts: cafe24CountBy(orders, "payment_status"),
+        shippingStatusCounts: cafe24CountBy(orders, "shipping_status"),
+        orderPlaceCounts: cafe24CountBy(orders, "order_place_id"),
+        paymentDatePresentCount:
+          orders.filter(order => Boolean(order?.payment_date)).length,
+        schema: {
+          orderKeys: Object.keys(first).sort(),
+          itemKeys: Object.keys(firstItem).sort(),
+          buyerKeys: Object.keys(firstBuyer).sort(),
+          receiverKeys: Object.keys(firstReceiver).sort()
+        },
+        safeSamples,
+        tokenAutoRefreshedDuringRead: anyRefresh,
+        piiReturned: false
+      });
+    } catch (error) {
+      console.error(
+        "[cafe24 orders preview v2.2]",
+        error?.code || error?.message
+      );
+
+      return res.status(
+        Number(error?.httpStatus) || 500
+      ).json({
+        ok: false,
+        error:
+          error?.message ||
+          "Cafe24 V2.2 주문 진단 조회 실패"
+      });
+    }
+  }
+);
+
+// === CAFE24_V2_2_PAID_SCHEMA_DIAGNOSTIC_END ===
+
+
 // === CAFE24_OAUTH_GATEWAY_V1_END ===
 
 app.listen(PORT, () => {
