@@ -3453,6 +3453,285 @@ app.get(
 // === CAFE24_V2_2_PAID_SCHEMA_DIAGNOSTIC_END ===
 
 
+// === CAFE24_V3_NORMALIZED_FEED_START ===
+function cafe24V3Number(value) {
+  const n = Number(String(value ?? "").replace(/,/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+function cafe24V3Text(value) {
+  return String(value ?? "").trim();
+}
+function cafe24V3OptionText(item) {
+  const values = [];
+  function add(value) {
+    if (value === undefined || value === null) return;
+    if (Array.isArray(value)) {
+      for (const row of value) add(row);
+      return;
+    }
+    if (typeof value === "object") {
+      for (const key of [
+        "name","option_name","option_value","value",
+        "additional_option_name","additional_option_value"
+      ]) {
+        const v = value?.[key];
+        if (v !== undefined && v !== null && String(v).trim()) {
+          values.push(String(v).trim());
+        }
+      }
+      return;
+    }
+    const s = String(value).trim();
+    if (s) values.push(s);
+  }
+  add(item?.option_value);
+  add(item?.option_value_default);
+  add(item?.options);
+  add(item?.additional_option_value);
+  add(item?.additional_option_values);
+  return [...new Set(values)].join(" / ");
+}
+function cafe24V3Claim(rawStatus) {
+  const s = cafe24V3Text(rawStatus).toUpperCase();
+  if (/^C/.test(s)) {
+    if (s === "C11") return { claimType:"CANCEL", claimStatus:"CANCEL_REJECT" };
+    if (["C40","C41","C42","C43","C47","C48","C49"].includes(s))
+      return { claimType:"CANCEL", claimStatus:"CANCEL_DONE" };
+    if (s === "C00") return { claimType:"CANCEL", claimStatus:"CANCEL_REQUEST" };
+    return { claimType:"CANCEL", claimStatus:"CANCEL_PROCESS" };
+  }
+  if (/^R/.test(s)) {
+    if (s === "R11") return { claimType:"RETURN", claimStatus:"RETURN_REJECT" };
+    if (["R40","R41","R42","R43"].includes(s))
+      return { claimType:"RETURN", claimStatus:"RETURN_DONE" };
+    if (s === "R12") return { claimType:"RETURN", claimStatus:"RETURN_HOLD" };
+    if (s === "R00") return { claimType:"RETURN", claimStatus:"RETURN_REQUEST" };
+    return { claimType:"RETURN", claimStatus:"RETURN_PROCESS" };
+  }
+  if (/^E/.test(s)) {
+    if (s === "E11") return { claimType:"EXCHANGE", claimStatus:"EXCHANGE_REJECT" };
+    if (s === "E40") return { claimType:"EXCHANGE", claimStatus:"EXCHANGE_DONE" };
+    if (s === "E12") return { claimType:"EXCHANGE", claimStatus:"EXCHANGE_HOLD" };
+    if (s === "E00") return { claimType:"EXCHANGE", claimStatus:"EXCHANGE_REQUEST" };
+    return { claimType:"EXCHANGE", claimStatus:"EXCHANGE_PROCESS" };
+  }
+  return { claimType:null, claimStatus:null };
+}
+function cafe24V3ItemStatus(item) {
+  const raw = cafe24V3Text(item?.order_status || item?.status_code).toUpperCase();
+  if (/^C/.test(raw)) return "CANCELED";
+  if (item?.purchaseconfirmation_date || raw === "N50") return "PURCHASE_DECIDED";
+  if (item?.delivered_date || raw === "N40") return "DELIVERED";
+  if (item?.shipped_date || cafe24V3Text(item?.tracking_no) || raw === "N30")
+    return "DELIVERING";
+  return "PAYED";
+}
+function cafe24V3LastChangedAt(item, order) {
+  return (
+    item?.purchaseconfirmation_date ||
+    item?.delivered_date ||
+    item?.exchange_date ||
+    item?.return_confirmed_date ||
+    item?.refund_date ||
+    item?.shipped_date ||
+    item?.cancel_date ||
+    item?.cancel_request_date ||
+    item?.ordered_date ||
+    order?.payment_date ||
+    order?.order_date ||
+    null
+  );
+}
+function cafe24V3AggregateOrderStatus(items) {
+  if (!items.length) return "PAYED";
+  const statuses = items.map(row => row.itemStatus);
+  if (statuses.every(s => s === "CANCELED")) return "CANCELED";
+  const active = statuses.filter(s => s !== "CANCELED");
+  if (active.includes("PAYED")) return "PAYED";
+  if (active.includes("DELIVERING")) return "DELIVERING";
+  if (active.includes("DELIVERED")) return "DELIVERED";
+  if (active.includes("PURCHASE_DECIDED")) return "PURCHASE_DECIDED";
+  return "PAYED";
+}
+function cafe24V3AggregateShipping(items) {
+  const active = items.filter(row => row.itemStatus !== "CANCELED");
+  if (!active.length) return "NOT_TRACKING";
+  if (active.every(row => ["DELIVERED","PURCHASE_DECIDED"].includes(row.itemStatus)))
+    return "DELIVERY_COMPLETION";
+  if (active.some(row => ["DELIVERING","DELIVERED","PURCHASE_DECIDED"].includes(row.itemStatus)))
+    return "DELIVERING";
+  return "NOT_TRACKING";
+}
+function cafe24V3NormalizeOrder(order) {
+  const rawItems = Array.isArray(order?.items) ? order.items : [];
+  const receiver =
+    Array.isArray(order?.receivers) && order.receivers.length
+      ? order.receivers[0] || {}
+      : {};
+  const buyer =
+    order?.buyer && typeof order.buyer === "object"
+      ? order.buyer
+      : {};
+  const items = rawItems.map(item => {
+    const rawStatus = cafe24V3Text(item?.order_status || item?.status_code).toUpperCase();
+    const claim = cafe24V3Claim(rawStatus);
+    const itemStatus = cafe24V3ItemStatus(item);
+    const quantity = Math.max(1, Math.trunc(cafe24V3Number(item?.quantity) || 1));
+    const totalPrice =
+      cafe24V3Number(item?.payment_amount) ||
+      (cafe24V3Number(item?.product_price) + cafe24V3Number(item?.option_price)) * quantity;
+    return {
+      externalItemId:
+        cafe24V3Text(item?.order_item_code) ||
+        cafe24V3Text(item?.item_no),
+      productName:
+        cafe24V3Text(item?.product_name) ||
+        cafe24V3Text(item?.product_name_default) ||
+        "-",
+      optionText: cafe24V3OptionText(item),
+      quantity,
+      unitPrice: quantity > 0 ? totalPrice / quantity : cafe24V3Number(item?.product_price),
+      totalPrice,
+      itemStatus,
+      claimStatus: claim.claimStatus,
+      claimType: claim.claimType,
+      lastChangedType: rawStatus || null,
+      lastChangedAt: cafe24V3LastChangedAt(item, order),
+      placeOrderStatus: null,
+      shippingCompanyCode: cafe24V3Text(item?.shipping_company_code) || null,
+      shippingCompanyName: cafe24V3Text(item?.shipping_company_name) || null,
+      trackingNo: cafe24V3Text(item?.tracking_no) || null,
+      dispatchedAt: item?.shipped_date || null,
+      rawPayload: item
+    };
+  }).filter(item => item.externalItemId);
+  const firstShipping =
+    items.find(item => item.trackingNo || item.shippingCompanyName) ||
+    items[0] ||
+    {};
+  const firstClaim =
+    items.find(item => item.claimStatus && !/(DONE|REJECT)$/.test(item.claimStatus)) ||
+    items.find(item => item.claimStatus) ||
+    {};
+  return {
+    externalOrderId: cafe24V3Text(order?.order_id),
+    externalOrderNumber: cafe24V3Text(order?.order_id),
+    orderedAt: order?.order_date || null,
+    paidAt: order?.payment_date || null,
+    buyerName:
+      cafe24V3Text(buyer?.name) ||
+      cafe24V3Text(buyer?.user_name) ||
+      cafe24V3Text(order?.billing_name) ||
+      null,
+    buyerPhone:
+      cafe24V3Text(buyer?.cellphone) ||
+      cafe24V3Text(buyer?.phone) ||
+      null,
+    recipientName: cafe24V3Text(receiver?.name) || null,
+    recipientPhone:
+      cafe24V3Text(receiver?.cellphone) ||
+      cafe24V3Text(receiver?.phone) ||
+      null,
+    recipientZip: cafe24V3Text(receiver?.zipcode) || null,
+    recipientAddress1:
+      cafe24V3Text(receiver?.address1) ||
+      cafe24V3Text(receiver?.address_full) ||
+      null,
+    recipientAddress2: cafe24V3Text(receiver?.address2) || null,
+    recipientMemo: cafe24V3Text(receiver?.shipping_message) || null,
+    orderStatus: cafe24V3AggregateOrderStatus(items),
+    claimStatus: firstClaim?.claimStatus || null,
+    shippingMethod:
+      cafe24V3Text(order?.shipping_type_text) ||
+      cafe24V3Text(order?.shipping_type) ||
+      null,
+    shippingCompanyCode: firstShipping?.shippingCompanyCode || null,
+    shippingCompanyName: firstShipping?.shippingCompanyName || null,
+    trackingNo: firstShipping?.trackingNo || null,
+    shippingStatus: cafe24V3AggregateShipping(items),
+    dispatchedAt: firstShipping?.dispatchedAt || null,
+    paidFlag: cafe24V3Text(order?.paid),
+    canceledFlag: cafe24V3Text(order?.canceled),
+    orderPlaceId: cafe24V3Text(order?.order_place_id),
+    rawPayload: {
+      source: "cafe24",
+      order_id: order?.order_id || null,
+      paid: order?.paid || null,
+      canceled: order?.canceled || null,
+      shipping_status: order?.shipping_status || null,
+      order_place_id: order?.order_place_id || null,
+      payment_method: order?.payment_method || null,
+      payment_method_name: order?.payment_method_name || null,
+      payment_amount: order?.payment_amount || null
+    },
+    items
+  };
+}
+
+app.get(
+  "/cafe24/orders-normalized",
+  requireFirebaseAdmin,
+  async (req, res) => {
+    try {
+      const days = Math.max(1, Math.min(30, Math.trunc(Number(req.query.days || 7))));
+      const today = cafe24KstDateKey(new Date());
+      const startDate = cafe24ShiftDateKey(today, -(days - 1));
+      const rawOrders = [];
+      let offset = 0;
+      let tokenAutoRefreshed = false;
+
+      while (offset <= 15000) {
+        const result = await cafe24ApiGet(
+          "/api/v2/admin/orders",
+          {
+            shop_no: 1,
+            start_date: startDate,
+            end_date: today,
+            date_type: "pay_date",
+            embed: "items,receivers,buyer",
+            limit: 1000,
+            offset
+          }
+        );
+        tokenAutoRefreshed = tokenAutoRefreshed || result.refreshed;
+        const batch = Array.isArray(result.json?.orders) ? result.json.orders : [];
+        rawOrders.push(...batch);
+        if (batch.length < 1000) break;
+        offset += 1000;
+      }
+
+      const paidOrders = rawOrders.filter(
+        order => cafe24V3Text(order?.paid).toUpperCase() === "T"
+      );
+      const orders = paidOrders
+        .map(cafe24V3NormalizeOrder)
+        .filter(order => order.externalOrderId);
+
+      return res.json({
+        ok: true,
+        cafe24NormalizedFeed: "v3",
+        days,
+        startDate,
+        endDate: today,
+        rawOrderCount: rawOrders.length,
+        paidOrderCount: orders.length,
+        itemCount: orders.reduce((sum, order) => sum + order.items.length, 0),
+        tokenAutoRefreshed,
+        orders
+      });
+    } catch (error) {
+      console.error("[cafe24 orders normalized]", error?.code || error?.message);
+      return res.status(Number(error?.httpStatus) || 500).json({
+        ok: false,
+        error: error?.message || "Cafe24 정규화 주문 조회 실패"
+      });
+    }
+  }
+);
+// === CAFE24_V3_NORMALIZED_FEED_END ===
+
+
+
 // === CAFE24_OAUTH_GATEWAY_V1_END ===
 
 app.listen(PORT, () => {
