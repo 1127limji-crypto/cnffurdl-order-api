@@ -3461,35 +3461,100 @@ function cafe24V3Number(value) {
 function cafe24V3Text(value) {
   return String(value ?? "").trim();
 }
+function cafe24V3OptionPrimitive(value) {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value).trim();
+  }
+  return "";
+}
+
+function cafe24V3OptionObjectText(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return cafe24V3OptionPrimitive(value);
+  }
+
+  const name =
+    cafe24V3OptionPrimitive(value.name) ||
+    cafe24V3OptionPrimitive(value.option_name) ||
+    cafe24V3OptionPrimitive(value.additional_option_name) ||
+    cafe24V3OptionPrimitive(value.title) ||
+    cafe24V3OptionPrimitive(value.key);
+
+  const optionValue =
+    cafe24V3OptionPrimitive(value.value) ||
+    cafe24V3OptionPrimitive(value.option_value) ||
+    cafe24V3OptionPrimitive(value.additional_option_value) ||
+    cafe24V3OptionPrimitive(value.text);
+
+  if (name && optionValue) return `${name}=${optionValue}`;
+  if (optionValue) return optionValue;
+
+  const pairs = [];
+
+  for (const [key, raw] of Object.entries(value)) {
+    if (
+      [
+        "name",
+        "option_name",
+        "additional_option_name",
+        "title",
+        "key",
+        "value",
+        "option_value",
+        "additional_option_value",
+        "text"
+      ].includes(key)
+    ) {
+      continue;
+    }
+
+    const primitive = cafe24V3OptionPrimitive(raw);
+
+    if (primitive) {
+      pairs.push(`${key}=${primitive}`);
+    }
+  }
+
+  return pairs.join(" / ");
+}
+
 function cafe24V3OptionText(item) {
   const values = [];
+
   function add(value) {
     if (value === undefined || value === null) return;
+
     if (Array.isArray(value)) {
       for (const row of value) add(row);
       return;
     }
+
     if (typeof value === "object") {
-      for (const key of [
-        "name","option_name","option_value","value",
-        "additional_option_name","additional_option_value"
-      ]) {
-        const v = value?.[key];
-        if (v !== undefined && v !== null && String(v).trim()) {
-          values.push(String(v).trim());
-        }
+      const rendered = cafe24V3OptionObjectText(value);
+      if (rendered) values.push(rendered);
+
+      for (const raw of Object.values(value)) {
+        if (Array.isArray(raw)) add(raw);
       }
+
       return;
     }
-    const s = String(value).trim();
-    if (s) values.push(s);
+
+    const primitive = cafe24V3OptionPrimitive(value);
+    if (primitive) values.push(primitive);
   }
+
   add(item?.option_value);
   add(item?.option_value_default);
   add(item?.options);
   add(item?.additional_option_value);
   add(item?.additional_option_values);
-  return [...new Set(values)].join(" / ");
+
+  return [...new Set(values)]
+    .filter(value => value && value !== "[object Object]")
+    .join(" / ");
 }
 function cafe24V3Claim(rawStatus) {
   const s = cafe24V3Text(rawStatus).toUpperCase();
