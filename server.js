@@ -1134,7 +1134,14 @@ function buildPublicEstimatePayload(input, estimateNo) {
 app.post("/public/estimates", async (req, res) => {
   try {
     const origin = String(req.headers.origin || "");
-    if (origin && origin !== "https://cnffurdl.cafe24.com") {
+    const __estimateRequestOrigin = String(req.headers.origin || "");
+    const __estimateRequestReferer = String(req.headers.referer || "");
+    const __isCnffurdlEstimateOrigin =
+      __estimateRequestOrigin === "https://cnffurdl.com" ||
+      __estimateRequestOrigin === "https://www.cnffurdl.com" ||
+      __estimateRequestReferer.startsWith("https://cnffurdl.com/") ||
+      __estimateRequestReferer.startsWith("https://www.cnffurdl.com/");
+    if (!__isCnffurdlEstimateOrigin && (origin && origin !== "https://cnffurdl.cafe24.com")) {
       return res.status(403).json({
         ok: false,
         code: "ORIGIN_NOT_ALLOWED",
