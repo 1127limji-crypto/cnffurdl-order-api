@@ -3901,6 +3901,62 @@ app.get("/firebase-diag", async (req, res) => {
 });
 
 
+
+// TEMP_FIREBASE_REST_DIAG_V1
+app.get("/firebase-rest-diag", async (req, res) => {
+  try {
+    initFirebaseAdmin();
+
+    const projectId = process.env.FIREBASE_PROJECT_ID;
+    const credential = admin.app().options.credential;
+
+    const tokenResult = await Promise.race([
+      credential.getAccessToken(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("TOKEN_TIMEOUT")), 8000)
+      )
+    ]);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+
+    try {
+      const url =
+        `https://firestore.googleapis.com/v1/projects/${projectId}` +
+        `/databases/(default)/documents/counters?pageSize=1`;
+
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${tokenResult.access_token}`
+        },
+        signal: controller.signal
+      });
+
+      const text = await response.text();
+
+      return res.status(response.ok ? 200 : 500).json({
+        ok: response.ok,
+        projectIdSet: !!projectId,
+        httpStatus: response.status,
+        response: text.slice(0, 1500)
+      });
+
+    } finally {
+      clearTimeout(timer);
+    }
+
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error.name === "AbortError"
+        ? "DIRECT_FIRESTORE_REST_TIMEOUT"
+        : error.message
+    });
+  }
+});
+
+
 app.listen(PORT, () => {
   console.log(`cnffurdl-order-api running on port ${PORT}`);
 });
