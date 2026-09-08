@@ -74,6 +74,12 @@ function safeSecretEqual(a, b) {
   return crypto.timingSafeEqual(left, right);
 }
 
+function isBridgeOnlyRequest(req) {
+  return ["1", "true", "yes"].includes(
+    String(req.query.bridge || "").trim().toLowerCase()
+  );
+}
+
 
 async function requireFirebaseAdmin(req, res, next) {
   try {
@@ -1466,13 +1472,26 @@ app.get("/naver/orders", requireFirebaseAdmin, async (req, res) => {
     }
 
     const simpleOrders = detailRows.map(extractSimpleOrder).filter(isBeforeShipmentOrClaim);
-    const savedCount = await saveNaverOrdersToFirestore(simpleOrders, "naver-orders");
-    const matchResult = await matchNaverOrdersToEstimates(simpleOrders, "naver-orders");
+    const bridgeOnly = isBridgeOnlyRequest(req);
+
+    let savedCount = 0;
+    let matchResult = {
+      matchedCount: 0,
+      candidatesCount: 0,
+      results: []
+    };
+
+    if (!bridgeOnly) {
+      savedCount = await saveNaverOrdersToFirestore(simpleOrders, "naver-orders");
+      matchResult = await matchNaverOrdersToEstimates(simpleOrders, "naver-orders");
+    }
 
     res.json({
       ok: true,
       message: "네이버 스마트스토어 주문 조회 성공",
       admin: req.adminUser.email,
+      bridgeOnly,
+      persistence: bridgeOnly ? "skipped" : "firestore",
       query: {
         from,
         to,
@@ -1950,9 +1969,7 @@ app.get("/naver/unshipped-orders", requireFirebaseAdmin, async (req, res) => {
 
     // Production Manager는 네이버 데이터를 Supabase에 저장하므로,
     // bridge=1 요청에서는 기존 Firestore 저장/견적 자동매칭을 건드리지 않습니다.
-    const bridgeOnly = ["1", "true", "yes"].includes(
-      String(req.query.bridge || "").trim().toLowerCase()
-    );
+    const bridgeOnly = isBridgeOnlyRequest(req);
 
     let savedCount = 0;
     let matchResult = {
@@ -3805,157 +3822,6 @@ app.get(
 
 
 // === CAFE24_OAUTH_GATEWAY_V1_END ===
-
-
-// TEMP_FIREBASE_DIAG_V1
-app.get("/firebase-diag", async (req, res) => {
-  const result = {
-    ok: true,
-    firebaseInit: null,
-    googleConnection: null,
-    firebaseCredential: null,
-    firestoreRead: null
-  };
-
-  function withTimeout(promise, label, ms = 8000) {
-    return Promise.race([
-      promise,
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(label + "_TIMEOUT")), ms)
-      )
-    ]);
-  }
-
-  try {
-    initFirebaseAdmin();
-    result.firebaseInit = "OK";
-  } catch (error) {
-    result.ok = false;
-    result.firebaseInit = error.message;
-    return res.status(500).json(result);
-  }
-
-  try {
-    const response = await withTimeout(
-      fetch("https://firestore.googleapis.com/"),
-      "GOOGLE_CONNECTION",
-      8000
-    );
-
-    result.googleConnection = {
-      ok: true,
-      status: response.status
-    };
-  } catch (error) {
-    result.ok = false;
-    result.googleConnection = {
-      ok: false,
-      error: error.message
-    };
-  }
-
-  try {
-    const credential = admin.app().options.credential;
-
-    const token = await withTimeout(
-      credential.getAccessToken(),
-      "FIREBASE_CREDENTIAL",
-      8000
-    );
-
-    result.firebaseCredential = {
-      ok: true,
-      hasToken: !!(token && token.access_token)
-    };
-  } catch (error) {
-    result.ok = false;
-    result.firebaseCredential = {
-      ok: false,
-      error: error.message
-    };
-  }
-
-  try {
-    const snapshot = await withTimeout(
-      admin.firestore()
-        .collection("counters")
-        .limit(1)
-        .get(),
-      "FIRESTORE_READ",
-      8000
-    );
-
-    result.firestoreRead = {
-      ok: true,
-      size: snapshot.size
-    };
-  } catch (error) {
-    result.ok = false;
-    result.firestoreRead = {
-      ok: false,
-      error: error.message
-    };
-  }
-
-  res.status(result.ok ? 200 : 500).json(result);
-});
-
-
-
-// TEMP_FIREBASE_REST_DIAG_V1
-app.get("/firebase-rest-diag", async (req, res) => {
-  try {
-    initFirebaseAdmin();
-
-    const projectId = process.env.FIREBASE_PROJECT_ID;
-    const credential = admin.app().options.credential;
-
-    const tokenResult = await Promise.race([
-      credential.getAccessToken(),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("TOKEN_TIMEOUT")), 8000)
-      )
-    ]);
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 10000);
-
-    try {
-      const url =
-        `https://firestore.googleapis.com/v1/projects/${projectId}` +
-        `/databases/(default)/documents/counters?pageSize=1`;
-
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${tokenResult.access_token}`
-        },
-        signal: controller.signal
-      });
-
-      const text = await response.text();
-
-      return res.status(response.ok ? 200 : 500).json({
-        ok: response.ok,
-        projectIdSet: !!projectId,
-        httpStatus: response.status,
-        response: text.slice(0, 1500)
-      });
-
-    } finally {
-      clearTimeout(timer);
-    }
-
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error.name === "AbortError"
-        ? "DIRECT_FIRESTORE_REST_TIMEOUT"
-        : error.message
-    });
-  }
-});
-
 
 app.listen(PORT, () => {
   console.log(`cnffurdl-order-api running on port ${PORT}`);
