@@ -3806,6 +3806,101 @@ app.get(
 
 // === CAFE24_OAUTH_GATEWAY_V1_END ===
 
+
+// TEMP_FIREBASE_DIAG_V1
+app.get("/firebase-diag", async (req, res) => {
+  const result = {
+    ok: true,
+    firebaseInit: null,
+    googleConnection: null,
+    firebaseCredential: null,
+    firestoreRead: null
+  };
+
+  function withTimeout(promise, label, ms = 8000) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(label + "_TIMEOUT")), ms)
+      )
+    ]);
+  }
+
+  try {
+    initFirebaseAdmin();
+    result.firebaseInit = "OK";
+  } catch (error) {
+    result.ok = false;
+    result.firebaseInit = error.message;
+    return res.status(500).json(result);
+  }
+
+  try {
+    const response = await withTimeout(
+      fetch("https://firestore.googleapis.com/"),
+      "GOOGLE_CONNECTION",
+      8000
+    );
+
+    result.googleConnection = {
+      ok: true,
+      status: response.status
+    };
+  } catch (error) {
+    result.ok = false;
+    result.googleConnection = {
+      ok: false,
+      error: error.message
+    };
+  }
+
+  try {
+    const credential = admin.app().options.credential;
+
+    const token = await withTimeout(
+      credential.getAccessToken(),
+      "FIREBASE_CREDENTIAL",
+      8000
+    );
+
+    result.firebaseCredential = {
+      ok: true,
+      hasToken: !!(token && token.access_token)
+    };
+  } catch (error) {
+    result.ok = false;
+    result.firebaseCredential = {
+      ok: false,
+      error: error.message
+    };
+  }
+
+  try {
+    const snapshot = await withTimeout(
+      admin.firestore()
+        .collection("counters")
+        .limit(1)
+        .get(),
+      "FIRESTORE_READ",
+      8000
+    );
+
+    result.firestoreRead = {
+      ok: true,
+      size: snapshot.size
+    };
+  } catch (error) {
+    result.ok = false;
+    result.firestoreRead = {
+      ok: false,
+      error: error.message
+    };
+  }
+
+  res.status(result.ok ? 200 : 500).json(result);
+});
+
+
 app.listen(PORT, () => {
   console.log(`cnffurdl-order-api running on port ${PORT}`);
 });
