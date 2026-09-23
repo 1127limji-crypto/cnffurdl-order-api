@@ -2667,7 +2667,11 @@ app.get("/cafe24/oauth/start", (req, res) => {
     authUrl.searchParams.set("client_id", c.clientId);
     authUrl.searchParams.set("state", state);
     authUrl.searchParams.set("redirect_uri", c.redirectUri);
-    authUrl.searchParams.set("scope", CAFE24_SCOPE);
+    // Explicit shipping reauthorization; normal collection consent is unchanged.
+    const requestedScope = req.query.shipping === "1"
+      ? "mall.read_order mall.write_order mall.read_shipping"
+      : CAFE24_SCOPE;
+    authUrl.searchParams.set("scope", requestedScope);
 
     return res.redirect(302, authUrl.toString());
   } catch (error) {
@@ -3822,6 +3826,9 @@ app.get(
 
 
 // === CAFE24_OAUTH_GATEWAY_V1_END ===
+
+// Epost shipment writes are separate from acceptance and use existing protected credentials.
+require('./register-epost-dispatch.cjs')(app, {safeSecretEqual,getProductOrderDetailsByIds,getNaverAccessToken,cafe24GetValidToken,cafe24RequireConfig,cafe24ApiGet,cafe24LoadTokenState});
 
 app.listen(PORT, () => {
   console.log(`cnffurdl-order-api running on port ${PORT}`);
