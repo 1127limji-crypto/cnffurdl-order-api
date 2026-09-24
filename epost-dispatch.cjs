@@ -1,27 +1,20 @@
+const {inspect}=require('./naver-shipping.cjs');
 // Official Naver dispatch + Cafe24 shipments. No automatic mutation retries.
 function createDispatch(deps){
  return async function dispatch(input){
   const {channel,orderId,itemIds,trackingNo,dispatchedAt,checkOnly}=input||{};
   if(checkOnly!==undefined&&typeof checkOnly!=='boolean')throw new Error('INVALID_DISPATCH');
-  if(!['naver','cafe24'].includes(channel)||!Array.isArray(itemIds)||!itemIds.length||itemIds.length>30||new Set(itemIds).size!==itemIds.length||itemIds.some(i=>!/^[a-zA-Z0-9_-]{1,60}$/.test(i))||!/^\d{13}$/.test(trackingNo)||!dispatchedAt||!Number.isFinite(Date.parse(dispatchedAt))||Date.parse(dispatchedAt)>Date.now()+60000)throw new Error('INVALID_DISPATCH');
+  if(!['naver','cafe24'].includes(channel)||!Array.isArray(itemIds)||!itemIds.length||itemIds.length>30||new Set(itemIds).size!==itemIds.length||itemIds.some(i=>!/^[a-zA-Z0-9_-]{1,60}$/.test(i))||!/^\d{13}$/.test(trackingNo)||/^0+$/.test(trackingNo)||!dispatchedAt||!Number.isFinite(Date.parse(dispatchedAt))||Date.parse(dispatchedAt)>Date.now()+60000)throw new Error('INVALID_DISPATCH');
   if(channel==='naver'){
-   const rows=await deps.naverRead(itemIds),found=new Map(rows.map(row=>{const r=row.productOrderInfo||row;return [String(r.productOrder?.productOrderId||r.productOrderId),r];}));
-   const pending=[],sent=[];
-   for(const id of itemIds){const r=found.get(id),p=r?.productOrder,d=r?.delivery;
-    if(!p||String(r.order?.orderId)!==String(orderId)||p.claimStatus)throw new Error('ORDER_CONFLICT');
-    if(['DELIVERING','DELIVERED','PURCHASE_DECIDED'].includes(p.productOrderStatus)){
-     if(d?.trackingNumber!==trackingNo||d?.deliveryCompany!=='EPOST')throw new Error('TRACKING_CONFLICT');sent.push(id);
-    }else if(p.productOrderStatus==='PAYED'&&p.placeOrderStatus==='OK')pending.push(id);
-    else throw new Error('ORDER_NOT_DISPATCHABLE');
-   }
-   if(checkOnly||!pending.length)return {sentItemIds:sent,pendingItemIds:pending};
+   const before=inspect(await deps.naverRead(itemIds),orderId,itemIds,trackingNo),pending=before.pendingItemIds;
+   if(checkOnly||!pending.length)return before;
    const r=await deps.naverWrite({dispatchProductOrders:pending.map(productOrderId=>({productOrderId,deliveryMethod:'DELIVERY',deliveryCompanyCode:'EPOST',trackingNumber:trackingNo,dispatchDate:dispatchedAt}))});
    const success=r.data?.successProductOrderIds,fail=r.data?.failProductOrderInfos;
    if(!Array.isArray(success)||!Array.isArray(fail))throw new Error('DISPATCH_RESULT_UNKNOWN');
-   const accepted=success.map(String).filter(id=>pending.includes(id));
-   const failedIds=fail.map(x=>String(x.productOrderId));
-   const remaining=pending.filter(id=>!accepted.includes(id));
-   return {sentItemIds:[...sent,...accepted],pendingItemIds:remaining,failed:remaining.length>0,uncertain:remaining.some(id=>!failedIds.includes(id))};
+   // Never treat a 200 or success array alone as proof of the applied carrier and number.
+   const after=inspect(await deps.naverRead(itemIds),orderId,itemIds,trackingNo);
+   const failedIds=new Set(fail.map(x=>String(x.productOrderId)));
+   return {...after,failed:after.pendingItemIds.length>0,uncertain:after.pendingItemIds.some(id=>!failedIds.has(id)),failedCodes:fail.filter(x=>pending.includes(String(x.productOrderId))).map(x=>({itemId:String(x.productOrderId),code:/^[A-Za-z0-9_.-]{1,60}$/.test(String(x.code||''))?String(x.code):'DISPATCH_FAILED'}))};
   }
   if(!/^[\w-]{1,60}$/.test(orderId||''))throw new Error('INVALID_ORDER');
   const rows=await deps.cafeRead(orderId),found=new Map(rows.map(i=>[i.order_item_code,i]));

@@ -1,3 +1,4 @@
+const {normalize}=require('./naver-shipping.cjs');
 const {createDispatch}=require('./epost-dispatch.cjs');
 module.exports=function register(app,helpers){
  const {safeSecretEqual,getProductOrderDetailsByIds,getNaverAccessToken,cafe24GetValidToken,cafe24RequireConfig,cafe24ApiGet,cafe24LoadTokenState}=helpers;
@@ -15,7 +16,17 @@ module.exports=function register(app,helpers){
   cafeCarrier:async()=>{const r=await cafe24ApiGet('/api/v2/admin/carriers',{shop_no:1,limit:100});const found=(r.json.carriers||[]).filter(c=>['우체국택배','우체국','우체국소포'].includes(String(c.shipping_carrier||'').replace(/\s/g,'')));if(found.length!==1)throw new Error('EPOST_CARRIER_NOT_CONFIGURED');return {carrier_id:Number(found[0].carrier_id),shipping_company_code:String(found[0].shipping_carrier_code||'')};},
   cafeWrite:async(id,body)=>{const grants=await scopes();if(!grants.includes('mall.write_order'))throw new Error('CAFE24_WRITE_PERMISSION_REQUIRED');const t=await cafe24GetValidToken(false),c=cafe24RequireConfig();if(!/^[a-z0-9-]+$/i.test(c.mallId))throw new Error('MALL_ID_INVALID');return jsonCall(`https://${c.mallId}.cafe24api.com/api/v2/admin/orders/${encodeURIComponent(id)}/shipments`,t.token.access_token,body);}
  });
- app.get('/shipping/epost/capabilities',internal,async(req,res)=>{const s=await scopes();res.set('Cache-Control','no-store').json({ok:true,version:1,naver:true,cafe24:s.includes('mall.write_order')&&s.includes('mall.read_shipping'),cafe24WriteOrder:s.includes('mall.write_order'),cafe24ReadShipping:s.includes('mall.read_shipping')});});
+ app.get('/shipping/epost/capabilities',internal,async(req,res)=>{const s=await scopes();res.set('Cache-Control','no-store').json({ok:true,version:1,naver:true,naverPreviewVersion:1,naverDispatchReadAfterWrite:true,cafe24:s.includes('mall.write_order')&&s.includes('mall.read_shipping'),cafe24WriteOrder:s.includes('mall.write_order'),cafe24ReadShipping:s.includes('mall.read_shipping')});});
+ // Explicit product-order IDs only. This POST performs reads and never calls dispatch.
+ app.post('/shipping/epost/naver/preview',internal,async(req,res)=>{
+  const {orderId,itemIds}=req.body||{};
+  if(!/^\d{10,30}$/.test(orderId||'')||!Array.isArray(itemIds)||!itemIds.length||itemIds.length>300||new Set(itemIds).size!==itemIds.length||itemIds.some(id=>!/^\d{10,30}$/.test(id)))return res.status(400).json({ok:false,code:'INVALID_ORDER'});
+  try{
+   const rows=(await getProductOrderDetailsByIds(itemIds)).map(normalize);
+   if(rows.length!==itemIds.length||itemIds.some(id=>rows.filter(r=>r.productOrderId===id&&r.orderId===orderId).length!==1))throw Error('ORDER_CONFLICT');
+   return res.set('Cache-Control','no-store').json({ok:true,version:1,checkedAt:new Date().toISOString(),orderId,readAuthenticated:true,items:rows});
+  }catch(e){return res.status(409).json({ok:false,code:e.message==='ORDER_CONFLICT'?'ORDER_CONFLICT':'NAVER_LOOKUP_FAILED'});}
+ });
  // Exact order lookup deliberately has no recent-date window. Read-only; no collection or dispatch writes.
  app.get('/shipping/epost/cafe24/order/:orderId',internal,async(req,res)=>{
   if(!/^\d{8}-\d{7}$/.test(req.params.orderId||''))return res.status(400).json({ok:false,code:'INVALID_ORDER'});
