@@ -9,13 +9,14 @@ module.exports=function register(app,helpers){
   if(!r.ok)throw new Error('CHANNEL_HTTP_ERROR');const j=await r.json();return j;
  }
  const inFlight=new Set();
- const run=createDispatch({
+ const deps={
   naverRead:ids=>getProductOrderDetailsByIds(ids),
   naverWrite:async body=>{const t=await getNaverAccessToken();return jsonCall('https://api.commerce.naver.com/external/v1/pay-order/seller/product-orders/dispatch',t.accessToken,body);},
   cafeRead:async id=>{const r=await cafe24ApiGet(`/api/v2/admin/orders/${encodeURIComponent(id)}/items`,{shop_no:1});if(!Array.isArray(r.json.items))throw new Error('CHANNEL_RESPONSE_INVALID');return r.json.items;},
   cafeCarrier:async()=>{const r=await cafe24ApiGet('/api/v2/admin/carriers',{shop_no:1,limit:100});const found=(r.json.carriers||[]).filter(c=>['우체국택배','우체국','우체국소포'].includes(String(c.shipping_carrier||'').replace(/\s/g,'')));if(found.length!==1)throw new Error('EPOST_CARRIER_NOT_CONFIGURED');return {carrier_id:Number(found[0].carrier_id),shipping_company_code:String(found[0].shipping_carrier_code||'')};},
   cafeWrite:async(id,body)=>{const grants=await scopes();if(!grants.includes('mall.write_order'))throw new Error('CAFE24_WRITE_PERMISSION_REQUIRED');const t=await cafe24GetValidToken(false),c=cafe24RequireConfig();if(!/^[a-z0-9-]+$/i.test(c.mallId))throw new Error('MALL_ID_INVALID');return jsonCall(`https://${c.mallId}.cafe24api.com/api/v2/admin/orders/${encodeURIComponent(id)}/shipments`,t.token.access_token,body);}
- });
+ };
+ const run=createDispatch(deps);
  app.get('/shipping/epost/capabilities',internal,async(req,res)=>{const s=await scopes();res.set('Cache-Control','no-store').json({ok:true,version:1,naver:true,naverPreviewVersion:1,naverDispatchReadAfterWrite:true,cafe24:s.includes('mall.write_order')&&s.includes('mall.read_shipping'),cafe24WriteOrder:s.includes('mall.write_order'),cafe24ReadShipping:s.includes('mall.read_shipping')});});
  // Explicit product-order IDs only. This POST performs reads and never calls dispatch.
  app.post('/shipping/epost/naver/preview',internal,async(req,res)=>{
@@ -49,4 +50,35 @@ module.exports=function register(app,helpers){
   }catch(e){const allowed=['INVALID_DISPATCH','INVALID_ORDER','ORDER_CONFLICT','TRACKING_CONFLICT','ORDER_NOT_DISPATCHABLE','EPOST_CARRIER_NOT_CONFIGURED','CAFE24_WRITE_PERMISSION_REQUIRED'];res.status(409).json({ok:false,code:allowed.includes(e.message)?e.message:'CHANNEL_RESULT_UNKNOWN'});}
   finally{inFlight.delete(lock);}
  });
+ const manual=require('./manual-shipping.cjs').createManualShipping({...deps,
+  cafeCarriers:async()=>{
+   const all=[];
+   for(let offset=0;offset<=1000;offset+=100){
+    const r=await cafe24ApiGet('/api/v2/admin/carriers',{shop_no:1,limit:100,offset});
+    if(!Array.isArray(r.json.carriers))throw Error('CARRIER_LIST_INVALID');
+    all.push(...r.json.carriers);if(r.json.carriers.length<100)return all.filter(c=>c.shipping_carrier_code&&Number.isInteger(Number(c.carrier_id))).map(c=>({id:String(c.carrier_id),name:String(c.shipping_carrier),code:String(c.shipping_carrier_code),carrier_id:Number(c.carrier_id)}));
+   }
+   throw Error('CARRIER_LIST_INVALID');
+  },
+  cafeOrder:async id=>{
+   const prefix='/api/v2/admin/orders/'+encodeURIComponent(id);
+   const [o,i,r]=await Promise.all([cafe24ApiGet(prefix,{shop_no:1}),cafe24ApiGet(prefix+'/items',{shop_no:1,limit:100}),cafe24ApiGet(prefix+'/receivers',{shop_no:1})]);
+   if(!Array.isArray(i.json.items)||i.json.items.length>=100)throw Error('ORDER_RESPONSE_REVIEW');
+   return {order:o.json.order,items:i.json.items,receivers:r.json.receivers};
+  }
+ });
+ for(const action of ['preview','dispatch'])app.post('/shipping/manual/'+action,internal,async(req,res)=>{
+  const lock=JSON.stringify([req.body?.channel,req.body?.orderId]);
+  if(action==='dispatch'&&inFlight.has(lock))return res.status(409).json({ok:false,code:'CHANNEL_OPERATION_IN_PROGRESS'});
+  if(action==='dispatch')inFlight.add(lock);
+  try{
+   if(req.body?.channel==='cafe24'){const s=await scopes();if(!s.includes('mall.read_shipping')||(action==='dispatch'&&!req.body.checkOnly&&!s.includes('mall.write_order')))throw Error('CAFE24_PERMISSION_REQUIRED');}
+   const result=await manual[action](req.body||{});
+   return res.set('Cache-Control','no-store').json({ok:true,version:1,...result});
+  }catch(e){
+   const safe=['INVALID_ORDER','INVALID_DISPATCH','INVALID_TRACKING','CARRIER_NOT_SUPPORTED','CARRIER_LIST_INVALID','ORDER_CONFLICT','ORDER_CHANGED','MULTIPLE_RECIPIENTS','CAFE24_PERMISSION_REQUIRED','ORDER_RESPONSE_REVIEW'];
+   return res.status(409).json({ok:false,code:safe.includes(e.message)?e.message:'CHANNEL_RESULT_UNKNOWN'});
+  }finally{if(action==='dispatch')inFlight.delete(lock);}
+ });
+
 };

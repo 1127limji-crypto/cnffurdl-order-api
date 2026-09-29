@@ -1,0 +1,1012 @@
+[
+  {
+    "id": "CJGLS",
+    "name": "CJ대한통운",
+    "code": "CJGLS"
+  },
+  {
+    "id": "HYUNDAI",
+    "name": "롯데택배",
+    "code": "HYUNDAI"
+  },
+  {
+    "id": "HANJIN",
+    "name": "한진택배",
+    "code": "HANJIN"
+  },
+  {
+    "id": "KGB",
+    "name": "로젠택배",
+    "code": "KGB"
+  },
+  {
+    "id": "EPOST",
+    "name": "우체국택배",
+    "code": "EPOST"
+  },
+  {
+    "id": "MTINTER",
+    "name": "엠티인터내셔널",
+    "code": "MTINTER"
+  },
+  {
+    "id": "1004HOME",
+    "name": "1004HOME",
+    "code": "1004HOME"
+  },
+  {
+    "id": "TWOFASTEXPRESS",
+    "name": "2FAST익스프레스",
+    "code": "TWOFASTEXPRESS"
+  },
+  {
+    "id": "ACE",
+    "name": "ACEexpress",
+    "code": "ACE"
+  },
+  {
+    "id": "ACIEXPRESS",
+    "name": "ACI",
+    "code": "ACIEXPRESS"
+  },
+  {
+    "id": "ADCAIR",
+    "name": "ADC항운택배",
+    "code": "ADCAIR"
+  },
+  {
+    "id": "AIRWAY",
+    "name": "AIRWAY익스프레스",
+    "code": "AIRWAY"
+  },
+  {
+    "id": "APEX",
+    "name": "APEX",
+    "code": "APEX"
+  },
+  {
+    "id": "ARAMEX",
+    "name": "ARAMEX",
+    "code": "ARAMEX"
+  },
+  {
+    "id": "ARGO",
+    "name": "ARGO",
+    "code": "ARGO"
+  },
+  {
+    "id": "AIRBOY",
+    "name": "AirboyExpress",
+    "code": "AIRBOY"
+  },
+  {
+    "id": "KOREXG",
+    "name": "CJ대한통운(국제택배)",
+    "code": "KOREXG"
+  },
+  {
+    "id": "CUPARCEL",
+    "name": "CU편의점택배",
+    "code": "CUPARCEL"
+  },
+  {
+    "id": "CWAYEXPRESS",
+    "name": "CwayExpress",
+    "code": "CWAYEXPRESS"
+  },
+  {
+    "id": "DHL",
+    "name": "DHL",
+    "code": "DHL"
+  },
+  {
+    "id": "DHLDE",
+    "name": "DHL(독일)",
+    "code": "DHLDE"
+  },
+  {
+    "id": "DHLGLOBALMAIL",
+    "name": "DHLGlobalMail",
+    "code": "DHLGLOBALMAIL"
+  },
+  {
+    "id": "DPD",
+    "name": "DPD",
+    "code": "DPD"
+  },
+  {
+    "id": "ECMSEXPRESS",
+    "name": "ECMSExpress",
+    "code": "ECMSEXPRESS"
+  },
+  {
+    "id": "EFS",
+    "name": "EFS",
+    "code": "EFS"
+  },
+  {
+    "id": "EMS",
+    "name": "EMS",
+    "code": "EMS"
+  },
+  {
+    "id": "EZUSA",
+    "name": "EZUSA",
+    "code": "EZUSA"
+  },
+  {
+    "id": "EUROPARCEL",
+    "name": "EuroParcel",
+    "code": "EUROPARCEL"
+  },
+  {
+    "id": "FEDEX",
+    "name": "FEDEX",
+    "code": "FEDEX"
+  },
+  {
+    "id": "GOP",
+    "name": "GOP당일택배",
+    "code": "GOP"
+  },
+  {
+    "id": "GOS",
+    "name": "GOS당일택배",
+    "code": "GOS"
+  },
+  {
+    "id": "GPSLOGIX",
+    "name": "GPSLOGIX",
+    "code": "GPSLOGIX"
+  },
+  {
+    "id": "GSFRESH",
+    "name": "GSFresh",
+    "code": "GSFRESH"
+  },
+  {
+    "id": "GSIEXPRESS",
+    "name": "GSI익스프레스",
+    "code": "GSIEXPRESS"
+  },
+  {
+    "id": "GSMNTON",
+    "name": "GSMNTON",
+    "code": "GSMNTON"
+  },
+  {
+    "id": "GSPOSTBOX",
+    "name": "GSPostbox퀵",
+    "code": "GSPOSTBOX"
+  },
+  {
+    "id": "CVSNET",
+    "name": "GSPostbox택배",
+    "code": "CVSNET"
+  },
+  {
+    "id": "GTSLOGIS",
+    "name": "GTS로지스",
+    "code": "GTSLOGIS"
+  },
+  {
+    "id": "HYBRID",
+    "name": "HI택배",
+    "code": "HYBRID"
+  },
+  {
+    "id": "HY",
+    "name": "HY",
+    "code": "HY"
+  },
+  {
+    "id": "IK",
+    "name": "IK물류",
+    "code": "IK"
+  },
+  {
+    "id": "KGLNET",
+    "name": "KGL네트웍스",
+    "code": "KGLNET"
+  },
+  {
+    "id": "KT",
+    "name": "KT EXPRESS",
+    "code": "KT"
+  },
+  {
+    "id": "LGE",
+    "name": "LG전자배송센터",
+    "code": "LGE"
+  },
+  {
+    "id": "LTL",
+    "name": "LTL",
+    "code": "LTL"
+  },
+  {
+    "id": "NDEXKOREA",
+    "name": "NDEX KOREA",
+    "code": "NDEXKOREA"
+  },
+  {
+    "id": "SBGLS",
+    "name": "SBGLS",
+    "code": "SBGLS"
+  },
+  {
+    "id": "SFEX",
+    "name": "SFexpress",
+    "code": "SFEX"
+  },
+  {
+    "id": "SLX",
+    "name": "SLX택배",
+    "code": "SLX"
+  },
+  {
+    "id": "SSG",
+    "name": "SSG",
+    "code": "SSG"
+  },
+  {
+    "id": "TNT",
+    "name": "TNT",
+    "code": "TNT"
+  },
+  {
+    "id": "LOGISPARTNER",
+    "name": "UFO로지스",
+    "code": "LOGISPARTNER"
+  },
+  {
+    "id": "UPS",
+    "name": "UPS",
+    "code": "UPS"
+  },
+  {
+    "id": "USPS",
+    "name": "USPS",
+    "code": "USPS"
+  },
+  {
+    "id": "WIZWA",
+    "name": "WIZWA",
+    "code": "WIZWA"
+  },
+  {
+    "id": "YJSWORLD",
+    "name": "YJS글로벌",
+    "code": "YJSWORLD"
+  },
+  {
+    "id": "YJS",
+    "name": "YJS글로벌(영국)",
+    "code": "YJS"
+  },
+  {
+    "id": "YUNDA",
+    "name": "YUNDAEXPRESS",
+    "code": "YUNDA"
+  },
+  {
+    "id": "IPARCEL",
+    "name": "i-parcel",
+    "code": "IPARCEL"
+  },
+  {
+    "id": "KY",
+    "name": "건영복합물류",
+    "code": "KY"
+  },
+  {
+    "id": "KUNYOUNG",
+    "name": "건영택배",
+    "code": "KUNYOUNG"
+  },
+  {
+    "id": "KDEXP",
+    "name": "경동택배",
+    "code": "KDEXP"
+  },
+  {
+    "id": "KIN",
+    "name": "경인택배",
+    "code": "KIN"
+  },
+  {
+    "id": "KORYO",
+    "name": "고려택배",
+    "code": "KORYO"
+  },
+  {
+    "id": "GDSP",
+    "name": "골드스넵스",
+    "code": "GDSP"
+  },
+  {
+    "id": "KOKUSAI",
+    "name": "국제익스프레스",
+    "code": "KOKUSAI"
+  },
+  {
+    "id": "GOODTOLUCK",
+    "name": "굿투럭",
+    "code": "GOODTOLUCK"
+  },
+  {
+    "id": "NAEUN",
+    "name": "나은물류",
+    "code": "NAEUN"
+  },
+  {
+    "id": "NOGOK",
+    "name": "노곡물류",
+    "code": "NOGOK"
+  },
+  {
+    "id": "NONGHYUP",
+    "name": "농협택배",
+    "code": "NONGHYUP"
+  },
+  {
+    "id": "HANAROMART",
+    "name": "농협하나로마트",
+    "code": "HANAROMART"
+  },
+  {
+    "id": "DAELIM",
+    "name": "대림통운",
+    "code": "DAELIM"
+  },
+  {
+    "id": "DAESIN",
+    "name": "대신택배",
+    "code": "DAESIN"
+  },
+  {
+    "id": "DAEWOON",
+    "name": "대운글로벌",
+    "code": "DAEWOON"
+  },
+  {
+    "id": "THEBAO",
+    "name": "더바오",
+    "code": "THEBAO"
+  },
+  {
+    "id": "DODOFLEX",
+    "name": "도도플렉스",
+    "code": "DODOFLEX"
+  },
+  {
+    "id": "DONGGANG",
+    "name": "동강물류",
+    "code": "DONGGANG"
+  },
+  {
+    "id": "DONGJIN",
+    "name": "동진특송",
+    "code": "DONGJIN"
+  },
+  {
+    "id": "CHAINLOGIS",
+    "name": "두발히어로당일택배",
+    "code": "CHAINLOGIS"
+  },
+  {
+    "id": "DRABBIT",
+    "name": "딜리래빗",
+    "code": "DRABBIT"
+  },
+  {
+    "id": "JMNP",
+    "name": "딜리박스",
+    "code": "JMNP"
+  },
+  {
+    "id": "ONEDAYLOGIS",
+    "name": "라스트마일",
+    "code": "ONEDAYLOGIS"
+  },
+  {
+    "id": "LINEEXP",
+    "name": "라인익스프레스",
+    "code": "LINEEXP"
+  },
+  {
+    "id": "ROADSUNEXPRESS",
+    "name": "로드썬익스프레스",
+    "code": "ROADSUNEXPRESS"
+  },
+  {
+    "id": "LOGISVALLEY",
+    "name": "로지스밸리",
+    "code": "LOGISVALLEY"
+  },
+  {
+    "id": "POOLATHOME",
+    "name": "로지스올홈케어(풀앳홈)",
+    "code": "POOLATHOME"
+  },
+  {
+    "id": "LOTOS",
+    "name": "로토스",
+    "code": "LOTOS"
+  },
+  {
+    "id": "HLCGLOBAL",
+    "name": "롯데글로벌로지스(국제택배)",
+    "code": "HLCGLOBAL"
+  },
+  {
+    "id": "LOTTECHILSUNG",
+    "name": "롯데칠성",
+    "code": "LOTTECHILSUNG"
+  },
+  {
+    "id": "MDLOGIS",
+    "name": "모든로지스(SLO)",
+    "code": "MDLOGIS"
+  },
+  {
+    "id": "DASONG",
+    "name": "물류대장",
+    "code": "DASONG"
+  },
+  {
+    "id": "BABABA",
+    "name": "바바바로지스",
+    "code": "BABABA"
+  },
+  {
+    "id": "BANPOOM",
+    "name": "반품구조대",
+    "code": "BANPOOM"
+  },
+  {
+    "id": "VALEX",
+    "name": "발렉스",
+    "code": "VALEX"
+  },
+  {
+    "id": "SHIPNERGY",
+    "name": "배송하기좋은날",
+    "code": "SHIPNERGY"
+  },
+  {
+    "id": "PANTOS",
+    "name": "LX판토스",
+    "code": "PANTOS"
+  },
+  {
+    "id": "VROONG",
+    "name": "부릉",
+    "code": "VROONG"
+  },
+  {
+    "id": "BRIDGE",
+    "name": "브릿지로지스",
+    "code": "BRIDGE"
+  },
+  {
+    "id": "EKDP",
+    "name": "삼다수가정배송",
+    "code": "EKDP"
+  },
+  {
+    "id": "SELC",
+    "name": "삼성전자물류",
+    "code": "SELC"
+  },
+  {
+    "id": "SEORIM",
+    "name": "서림물류",
+    "code": "SEORIM"
+  },
+  {
+    "id": "SWGEXP",
+    "name": "성원글로벌",
+    "code": "SWGEXP"
+  },
+  {
+    "id": "SUNGHUN",
+    "name": "성훈물류",
+    "code": "SUNGHUN"
+  },
+  {
+    "id": "SEBANG",
+    "name": "세방택배",
+    "code": "SEBANG"
+  },
+  {
+    "id": "SMARTLOGIS",
+    "name": "스마트로지스",
+    "code": "SMARTLOGIS"
+  },
+  {
+    "id": "SPARKLE",
+    "name": "스파클직배송",
+    "code": "SPARKLE"
+  },
+  {
+    "id": "SPASYS1",
+    "name": "스페이시스원",
+    "code": "SPASYS1"
+  },
+  {
+    "id": "CRLX",
+    "name": "시알로지텍",
+    "code": "CRLX"
+  },
+  {
+    "id": "ANYTRACK",
+    "name": "애니트랙",
+    "code": "ANYTRACK"
+  },
+  {
+    "id": "ABOUTPET",
+    "name": "어바웃펫",
+    "code": "ABOUTPET"
+  },
+  {
+    "id": "ESTHER",
+    "name": "에스더쉬핑",
+    "code": "ESTHER"
+  },
+  {
+    "id": "VENDORPIA",
+    "name": "벤더피아",
+    "code": "VENDORPIA"
+  },
+  {
+    "id": "ACTCORE",
+    "name": "에이씨티앤코아",
+    "code": "ACTCORE"
+  },
+  {
+    "id": "HKHOLDINGS",
+    "name": "에이치케이홀딩스",
+    "code": "HKHOLDINGS"
+  },
+  {
+    "id": "NTLPS",
+    "name": "엔티엘피스",
+    "code": "NTLPS"
+  },
+  {
+    "id": "TODAYPICKUP",
+    "name": "카카오T당일배송",
+    "code": "TODAYPICKUP"
+  },
+  {
+    "id": "RUSH",
+    "name": "오늘회러쉬",
+    "code": "RUSH"
+  },
+  {
+    "id": "ALLIN",
+    "name": "올인닷컴",
+    "code": "ALLIN"
+  },
+  {
+    "id": "ALLTAKOREA",
+    "name": "올타코리아",
+    "code": "ALLTAKOREA"
+  },
+  {
+    "id": "WIDETECH",
+    "name": "와이드테크",
+    "code": "WIDETECH"
+  },
+  {
+    "id": "YONGMA",
+    "name": "용마로지스",
+    "code": "YONGMA"
+  },
+  {
+    "id": "DCOMMERCE",
+    "name": "우리동네커머스",
+    "code": "DCOMMERCE"
+  },
+  {
+    "id": "WEVILL",
+    "name": "우리동네택배",
+    "code": "WEVILL"
+  },
+  {
+    "id": "HONAM",
+    "name": "우리택배",
+    "code": "HONAM"
+  },
+  {
+    "id": "WOORIHB",
+    "name": "우리한방택배",
+    "code": "WOORIHB"
+  },
+  {
+    "id": "WOOJIN",
+    "name": "우진인터로지스",
+    "code": "WOOJIN"
+  },
+  {
+    "id": "REGISTPOST",
+    "name": "우편등기",
+    "code": "REGISTPOST"
+  },
+  {
+    "id": "WOONGJI",
+    "name": "웅지익스프레스",
+    "code": "WOONGJI"
+  },
+  {
+    "id": "WARPEX",
+    "name": "워펙스",
+    "code": "WARPEX"
+  },
+  {
+    "id": "WINION",
+    "name": "위니온로지스",
+    "code": "WINION"
+  },
+  {
+    "id": "WIHTYOU",
+    "name": "위드유당일택배",
+    "code": "WIHTYOU"
+  },
+  {
+    "id": "WEMOVE",
+    "name": "위무브",
+    "code": "WEMOVE"
+  },
+  {
+    "id": "UFREIGHT",
+    "name": "유프레이트코리아",
+    "code": "UFREIGHT"
+  },
+  {
+    "id": "EUNHA",
+    "name": "은하쉬핑",
+    "code": "EUNHA"
+  },
+  {
+    "id": "INNOS",
+    "name": "이노스(올인닷컴)",
+    "code": "INNOS"
+  },
+  {
+    "id": "EMARTEVERYDAY",
+    "name": "이마트에브리데이",
+    "code": "EMARTEVERYDAY"
+  },
+  {
+    "id": "ESTLA",
+    "name": "이스트라",
+    "code": "ESTLA"
+  },
+  {
+    "id": "ETOMARS",
+    "name": "이투마스",
+    "code": "ETOMARS"
+  },
+  {
+    "id": "GENERALPOST",
+    "name": "일반우편",
+    "code": "GENERALPOST"
+  },
+  {
+    "id": "ILSHIN",
+    "name": "일신모닝택배",
+    "code": "ILSHIN"
+  },
+  {
+    "id": "ILYANG",
+    "name": "일양로지스",
+    "code": "ILYANG"
+  },
+  {
+    "id": "GNETWORK",
+    "name": "자이언트",
+    "code": "GNETWORK"
+  },
+  {
+    "id": "ZENIEL",
+    "name": "제니엘시스템",
+    "code": "ZENIEL"
+  },
+  {
+    "id": "JLOGIST",
+    "name": "제이로지스트",
+    "code": "JLOGIST"
+  },
+  {
+    "id": "GENIEGO",
+    "name": "지니고당일특급",
+    "code": "GENIEGO"
+  },
+  {
+    "id": "GDAKOREA",
+    "name": "지디에이코리아",
+    "code": "GDAKOREA"
+  },
+  {
+    "id": "GHSPEED",
+    "name": "지에이치스피드",
+    "code": "GHSPEED"
+  },
+  {
+    "id": "JIKGUMOON",
+    "name": "직구문",
+    "code": "JIKGUMOON"
+  },
+  {
+    "id": "CHUNIL",
+    "name": "천일택배",
+    "code": "CHUNIL"
+  },
+  {
+    "id": "CHOROC",
+    "name": "초록마을(외부연동)",
+    "code": "CHOROC"
+  },
+  {
+    "id": "CHOROCMAEUL",
+    "name": "초록마을(네이버직연동)",
+    "code": "CHOROCMAEUL"
+  },
+  {
+    "id": "COSHIP",
+    "name": "캐나다쉬핑",
+    "code": "COSHIP"
+  },
+  {
+    "id": "KJT",
+    "name": "케이제이티",
+    "code": "KJT"
+  },
+  {
+    "id": "QRUN",
+    "name": "큐런",
+    "code": "QRUN"
+  },
+  {
+    "id": "CUBEFLOW",
+    "name": "큐브플로우",
+    "code": "CUBEFLOW"
+  },
+  {
+    "id": "QXPRESS",
+    "name": "트랙스로지스",
+    "code": "QXPRESS"
+  },
+  {
+    "id": "HEREWEGO",
+    "name": "탱고앤고",
+    "code": "HEREWEGO"
+  },
+  {
+    "id": "TOMATO",
+    "name": "토마토앱",
+    "code": "TOMATO"
+  },
+  {
+    "id": "TODAY",
+    "name": "투데이",
+    "code": "TODAY"
+  },
+  {
+    "id": "TSG",
+    "name": "티에스지로지스",
+    "code": "TSG"
+  },
+  {
+    "id": "TEAMFRESH",
+    "name": "팀프레시",
+    "code": "TEAMFRESH"
+  },
+  {
+    "id": "PATEK",
+    "name": "파테크해운상공",
+    "code": "PATEK"
+  },
+  {
+    "id": "XINPATEK",
+    "name": "파테크해운항공",
+    "code": "XINPATEK"
+  },
+  {
+    "id": "PANASIA",
+    "name": "판월드로지스틱",
+    "code": "PANASIA"
+  },
+  {
+    "id": "PANSTAR",
+    "name": "팬스타국제특송(PIEX)",
+    "code": "PANSTAR"
+  },
+  {
+    "id": "FOREVER",
+    "name": "퍼레버택배",
+    "code": "FOREVER"
+  },
+  {
+    "id": "PULMUONE",
+    "name": "풀무원(로지스밸리)",
+    "code": "PULMUONE"
+  },
+  {
+    "id": "FREDIT",
+    "name": "프레딧",
+    "code": "FREDIT"
+  },
+  {
+    "id": "FRESHMATES",
+    "name": "프레시메이트",
+    "code": "FRESHMATES"
+  },
+  {
+    "id": "KURLY",
+    "name": "컬리넥스트마일",
+    "code": "KURLY"
+  },
+  {
+    "id": "PINGPONG",
+    "name": "핑퐁",
+    "code": "PINGPONG"
+  },
+  {
+    "id": "HOWSER",
+    "name": "하우저",
+    "code": "HOWSER"
+  },
+  {
+    "id": "HIVECITY",
+    "name": "하이브시티",
+    "code": "HIVECITY"
+  },
+  {
+    "id": "HANDALUM",
+    "name": "한달음택배",
+    "code": "HANDALUM"
+  },
+  {
+    "id": "HANDEX",
+    "name": "한덱스",
+    "code": "HANDEX"
+  },
+  {
+    "id": "HANMI",
+    "name": "한미포스트",
+    "code": "HANMI"
+  },
+  {
+    "id": "HANSSEM",
+    "name": "한샘",
+    "code": "HANSSEM"
+  },
+  {
+    "id": "HANWOORI",
+    "name": "한우리물류",
+    "code": "HANWOORI"
+  },
+  {
+    "id": "HPL",
+    "name": "한의사랑택배",
+    "code": "HPL"
+  },
+  {
+    "id": "HDEXP",
+    "name": "합동택배",
+    "code": "HDEXP"
+  },
+  {
+    "id": "HERWUZUG",
+    "name": "허우적",
+    "code": "HERWUZUG"
+  },
+  {
+    "id": "GLOVIS",
+    "name": "현대글로비스",
+    "code": "GLOVIS"
+  },
+  {
+    "id": "HOMEINNO",
+    "name": "홈이노베이션로지스",
+    "code": "HOMEINNO"
+  },
+  {
+    "id": "HOMEPICKTODAY",
+    "name": "홈픽오늘도착",
+    "code": "HOMEPICKTODAY"
+  },
+  {
+    "id": "HOMEPICK",
+    "name": "홈픽택배",
+    "code": "HOMEPICK"
+  },
+  {
+    "id": "HOMEPLUSDELIVERY",
+    "name": "홈플러스",
+    "code": "HOMEPLUSDELIVERY"
+  },
+  {
+    "id": "HOMEPLUSEXPRESS",
+    "name": "홈플러스익스프레스",
+    "code": "HOMEPLUSEXPRESS"
+  },
+  {
+    "id": "CARGOPLEASE",
+    "name": "화물을부탁해",
+    "code": "CARGOPLEASE"
+  },
+  {
+    "id": "HWATONG",
+    "name": "화통",
+    "code": "HWATONG"
+  },
+  {
+    "id": "CH1",
+    "name": "기타택배",
+    "code": "CH1"
+  },
+  {
+    "id": "LETUS",
+    "name": "바로스",
+    "code": "LETUS"
+  },
+  {
+    "id": "LETUS3PL",
+    "name": "레터스",
+    "code": "LETUS3PL"
+  },
+  {
+    "id": "CASA",
+    "name": "신세계까사",
+    "code": "CASA"
+  },
+  {
+    "id": "GCS",
+    "name": "지씨에스",
+    "code": "GCS"
+  },
+  {
+    "id": "GKGLOBAL",
+    "name": "지케이글로벌",
+    "code": "GKGLOBAL"
+  },
+  {
+    "id": "BRCH",
+    "name": "비알씨에이치",
+    "code": "BRCH"
+  },
+  {
+    "id": "DNDN",
+    "name": "든든택배",
+    "code": "DNDN"
+  },
+  {
+    "id": "GONELO",
+    "name": "고넬로",
+    "code": "GONELO"
+  },
+  {
+    "id": "JCLS",
+    "name": "JCLS",
+    "code": "JCLS"
+  },
+  {
+    "id": "JWTNL",
+    "name": "JWTNL",
+    "code": "JWTNL"
+  },
+  {
+    "id": "GS25",
+    "name": "GS편의점(퀵배달용)",
+    "code": "GS25"
+  },
+  {
+    "id": "CU",
+    "name": "CU편의점(퀵배달용)",
+    "code": "CU"
+  }
+]
