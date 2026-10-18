@@ -7,7 +7,7 @@ const vm = require('node:vm');
 // credentials. These fixtures are synthetic and contain no customer PII.
 const source = fs.readFileSync(require.resolve('./server.js'), 'utf8');
 const start = source.indexOf('function cafe24V3Number(');
-const end = source.indexOf('\napp.get(', start);
+const end = Math.min(...[source.indexOf('\napp.get(', start), source.indexOf("\nrequire('./cafe24-", start)].filter(index => index > start));
 assert.ok(start >= 0 && end > start, 'normalized feed section exists');
 const context = vm.createContext({});
 vm.runInContext(source.slice(start, end), context);

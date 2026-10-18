@@ -3767,11 +3767,21 @@ function cafe24V3NormalizeOrder(order) {
       order_place_id: order?.order_place_id || null,
       payment_method: order?.payment_method || null,
       payment_method_name: order?.payment_method_name || null,
-      payment_amount: order?.payment_amount || null
+      payment_amount: order?.payment_amount ?? null,
+      payment_date: order?.payment_date ?? null,
+      order_date: order?.order_date ?? null,
+      shipping_fee: order?.shipping_fee ?? null,
+      refund_amount: order?.refund_amount ?? null,
+      actual_payment_amount: order?.actual_payment_amount ?? null,
+      initial_order_amount: order?.initial_order_amount ?? null,
+      actual_order_amount: order?.actual_order_amount ?? null
     },
     items
   };
 }
+
+require('./cafe24-analytics-feed.cjs')(app, { requireFirebaseAdmin, cafe24ApiGet, normalize: cafe24V3NormalizeOrder });
+require('./cafe24-finance-feed.cjs')(app, { requireFirebaseAdmin, cafe24ApiGet });
 
 app.get(
   "/cafe24/orders-normalized",
@@ -3785,7 +3795,7 @@ app.get(
       let offset = 0;
       let tokenAutoRefreshed = false;
 
-      while (offset <= 15000) {
+      while (offset <= 7900) {
         const result = await cafe24ApiGet(
           "/api/v2/admin/orders",
           {
@@ -3794,17 +3804,19 @@ app.get(
             end_date: today,
             date_type: "pay_date",
             embed: "items,receivers,buyer",
-            limit: 1000,
+            limit: 100,
             offset
           }
         );
         tokenAutoRefreshed = tokenAutoRefreshed || result.refreshed;
         const batch = Array.isArray(result.json?.orders) ? result.json.orders : [];
         rawOrders.push(...batch);
-        if (batch.length < 1000) break;
-        offset += 1000;
+        if (batch.length < 100) break;
+        offset += 100;
       }
 
+      const counted=await cafe24ApiGet('/api/v2/admin/orders/count',{shop_no:1,start_date:startDate,end_date:today,date_type:'pay_date'});
+      if(!Number.isInteger(counted.json?.count)||counted.json.count!==rawOrders.length||new Set(rawOrders.map(o=>o.order_id)).size!==rawOrders.length)throw Error('CAFE24_RANGE_INCOMPLETE');
       const paidOrders = rawOrders.filter(
         order => cafe24V3Text(order?.paid).toUpperCase() === "T"
       );
@@ -3814,6 +3826,7 @@ app.get(
 
       return res.json({
         ok: true,
+        verifiedRange:{start:startDate,end:today,shopNo:1,dateType:'pay_date',sourceCount:rawOrders.length,deletedScope:'unverified',checkedAt:new Date().toISOString()},
         cafe24NormalizedFeed: "v3",
         days,
         startDate,
@@ -3845,4 +3858,3 @@ require('./register-epost-dispatch.cjs')(app, {safeSecretEqual,getProductOrderDe
 app.listen(PORT, () => {
   console.log(`cnffurdl-order-api running on port ${PORT}`);
 });
-

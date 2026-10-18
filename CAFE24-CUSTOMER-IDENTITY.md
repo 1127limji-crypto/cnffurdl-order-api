@@ -18,8 +18,17 @@ Re-read the affected dates through the existing authenticated sync and verify
 the importer and customer dashboard against the updated payload. Do not equate
 member count with all buying customers, or guest orders with new customers.
 
-This change does not add the finance reconciliation endpoint or alter finance
-verification status. Those need the exact contract expected by the current
-Production Manager client and a separate deployment verification.
+The gateway also registers the existing Production Manager consumer contract:
+`GET /cafe24/finance-orders?ids=...&shop_no=...` returns financial schema 1
+original snapshots without buyer/receiver/bank credentials. The existing admin
+or internal-key gate protects this route. Bounded exact order IDs, paginated
+refund reads, pacing and transient retries prevent silent partial results.
+`GET /cafe24/analytics-orders` provides counted seven-day order/pay-date pages
+for collection and identity backfill through the existing importer.
 
-Validation: `node --test test-cafe24-customer.cjs` and `node --check server.js`.
+Deployment must still verify the authenticated live endpoint, the actual
+Cloudtype revision and at least one regular Production Manager sync cycle.
+A one-off import is not evidence that periodic reconciliation works.
+
+Validation: customer fixtures, bounded finance feed fixtures, analytics-feed
+fixtures, complete server startup, existing auth and shipping HTTP regressions.
