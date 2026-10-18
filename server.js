@@ -3665,6 +3665,14 @@ function cafe24V3NormalizeOrder(order) {
     order?.buyer && typeof order.buyer === "object"
       ? order.buyer
       : {};
+  // Preserve the source member identifier for per-store customer analytics.
+  // Never infer membership from the orderer's name or a receiver's details.
+  const buyerMemberId =
+    cafe24V3Text(order?.member_id) ||
+    cafe24V3Text(buyer?.member_id) ||
+    null;
+  const rawShopNo = Number(order?.shop_no);
+  const shopNo = Number.isInteger(rawShopNo) && rawShopNo > 0 ? rawShopNo : 1;
   const items = rawItems.map(item => {
     const rawStatus = cafe24V3Text(item?.order_status || item?.status_code).toUpperCase();
     const claim = cafe24V3Claim(rawStatus);
@@ -3709,6 +3717,8 @@ function cafe24V3NormalizeOrder(order) {
   return {
     externalOrderId: cafe24V3Text(order?.order_id),
     externalOrderNumber: cafe24V3Text(order?.order_id),
+    shopNo,
+    buyerMemberId,
     orderedAt: order?.order_date || null,
     paidAt: order?.payment_date || null,
     buyerName:
@@ -3748,6 +3758,8 @@ function cafe24V3NormalizeOrder(order) {
     orderPlaceId: cafe24V3Text(order?.order_place_id),
     rawPayload: {
       source: "cafe24",
+      shop_no: shopNo,
+      member_id: buyerMemberId,
       order_id: order?.order_id || null,
       paid: order?.paid || null,
       canceled: order?.canceled || null,
@@ -3833,3 +3845,4 @@ require('./register-epost-dispatch.cjs')(app, {safeSecretEqual,getProductOrderDe
 app.listen(PORT, () => {
   console.log(`cnffurdl-order-api running on port ${PORT}`);
 });
+
