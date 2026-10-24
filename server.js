@@ -3858,3 +3858,5 @@ require('./register-epost-dispatch.cjs')(app, {safeSecretEqual,getProductOrderDe
 app.listen(PORT, () => {
   console.log(`cnffurdl-order-api running on port ${PORT}`);
 });
+
+require('./pm-estimates.cjs')(app, { requireFirebaseAdmin, admin, initFirebaseAdmin });
