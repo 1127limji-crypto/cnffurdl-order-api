@@ -663,6 +663,7 @@ async function saveNaverOrdersToFirestore(orders, source = "manual") {
     await batch.commit();
   }
 
+  app.locals.invalidateStoredNaver?.();
   return savedCount;
 }
 
@@ -3720,5 +3721,7 @@ app.listen(PORT, () => {
   console.log(`cnffurdl-order-api running on port ${PORT}`);
 });
 
+const storedNaverService = require('./pm-stored-orders.cjs')(app, { requireFirebaseAdmin, admin, initFirebaseAdmin });
+app.locals.invalidateStoredNaver = storedNaverService.invalidate;
 const pmEstimateService = require('./pm-estimates.cjs')(app, { requireFirebaseAdmin, admin, initFirebaseAdmin, readNaver: async ids => (await getProductOrderDetailsByIds(ids, {})).map(extractSimpleOrder) });
 
