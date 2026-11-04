@@ -6,7 +6,7 @@ class Query{
  constructor(filters=[],mask=null,order='__name__',after=null,n=Infinity,direction='asc'){Object.assign(this,{filters,mask,order,after,n,direction});}
  where(k,op,v){return new Query([...this.filters,[k,op,v]],this.mask,this.order,this.after,this.n,this.direction);}
  select(...mask){return new Query(this.filters,mask,this.order,this.after,this.n,this.direction);}
- orderBy(k,direction='asc'){return new Query(this.filters,this.mask,k,this.after,this.n,direction);}
+ orderBy(k,direction='asc'){assert(!(k==='__name__'&&direction==='desc'),'production has no descending document-ID index');return new Query(this.filters,this.mask,k,this.after,this.n,direction);}
  startAfter(doc){return new Query(this.filters,this.mask,this.order,doc.id,this.n,this.direction);}
  limit(n){return new Query(this.filters,this.mask,this.order,this.after,n,this.direction);}
  values(){return Object.entries(rows).filter(([id,r])=>this.filters.every(([k,op,v])=>{const value=k==='__name__'?id:r[k];if(value===undefined)return false;if(op==='in')return v.includes(value);if((v instanceof Date)!==(value instanceof Date))return false;return op==='=='?value===v:op==='>='?value>=v:op==='>'?value>v:value<v;})).filter(([id,r])=>this.order==='__name__'||r[this.order]!==undefined).sort(([a,ar],[b,br])=>{const av=this.order==='__name__'?a:ar[this.order],bv=this.order==='__name__'?b:br[this.order];return ((av>bv?1:av<bv?-1:0)||a.localeCompare(b))*(this.direction==='desc'?-1:1);});}
@@ -25,7 +25,7 @@ function reset(){rows={};for(let n=0;n<2500;n++)rows['20260101'+String(n).padSta
  service.invalidate();reads=0;queries=[];fail=false;}
 async function route(path,query){let status=200,body,headers={};const res={set:(k,v)=>{headers[k]=v;return res;},status:n=>{status=n;return res;},json:b=>{body=b;return res;}};await routes.get(path)({query,adminUser:{email:'qa@example.test'}},res);return {status,body,headers};}
 (async()=>{
- reset();const before=copy(rows),base={startDate:'2026-11-04',endDate:'2026-11-04',pageSize:'50'};
+ reset();const cold=register(app,{requireFirebaseAdmin:guard,admin:{firestore},initFirebaseAdmin:()=>{}});assert.equal((await cold.list({pageSize:50},'coldAdmin')).total,2576);reset();const before=copy(rows),base={startDate:'2026-11-04',endDate:'2026-11-04',pageSize:'50'};
  const first=await service.list(base,'adminA');assert.equal(first.orders.length,50);assert.equal(first.total,76);assert.equal(first.orders.some(r=>r.productOrderId===id),false);assert(first.metrics.documentsRead<2500);assert(queries.every(q=>q.mask&&q.filters.length));assert(!JSON.stringify(first).includes('doNotReturn'));
  const second=await service.list({...base,cursor:first.nextCursor},'adminA');assert.equal(second.orders.length,26);assert.equal(new Set([...first.orders,...second.orders].map(r=>r.id)).size,76);assert.equal(second.hasMore,false);
  await assert.rejects(service.list({...base,keyword:'격리테스트',cursor:first.nextCursor},'adminA'),e=>e.status===409);await assert.rejects(service.list({...base,cursor:first.nextCursor},'adminB'),e=>e.status===409);
@@ -36,7 +36,7 @@ async function route(path,query){let status=200,body,headers={};const res={set:(
  rows[id].claimStatus='CANCEL_DONE';service.invalidate();assert.equal((await service.list({...base,keyword:id},'adminA')).total,0);rows=copy(before);service.invalidate();
  const matches=await service.list({...base,sort:'matchedOnly'},'adminA');assert.equal(matches.total,1);assert.equal(matches.orders[0].productOrderId,id);
  const old=await service.list({startDate:'2026-01-01',endDate:'2026-01-01',pageSize:50},'adminA');assert.equal(old.total,2500);assert.equal(old.orders.length,50);assert(old.nextCursor);assert(!JSON.stringify(old).includes('doNotReturn'));
- const full=await service.list({pageSize:50},'adminA');assert.equal(full.total,2576);assert(full.metrics.partitions<=32);assert.equal(full.orders.length,50);const fullNext=await service.list({pageSize:50,cursor:full.nextCursor},'adminA');assert.equal(new Set([...full.orders,...fullNext.orders].map(r=>r.id)).size,100);
+ const full=await service.list({pageSize:50},'adminA');assert.equal(full.total,2576);assert(full.metrics.queryCount<=6);assert.equal(full.orders.length,50);const fullNext=await service.list({pageSize:50,cursor:full.nextCursor},'adminA');assert.equal(new Set([...full.orders,...fullNext.orders].map(r=>r.id)).size,100);
  const all=await service.list({keyword:id},'adminA');assert.equal(all.total,1);assert.equal(all.metrics.documentsRead,1);assert.equal((await service.list({...base,keyword:'없는 이름'},'adminA')).total,0);
  const bad=await route('/stored/admin/naver-orders',{startDate:'2026-02-30'});assert.equal(bad.status,400);assert.equal((await route('/stored/admin/naver-orders',{sort:'unsupported'})).status,400);
  const countBefore=queries.length;service.invalidate();await Promise.all([service.list({...base,fresh:'1'},'adminA'),service.list({...base,fresh:'1'},'adminA')]);const count=queries.length-countBefore;assert.equal(count,14);const afterCached=queries.length;await service.list(base,'adminA');assert.equal(queries.length,afterCached+5);await service.list(base,'adminB');assert(queries.length>afterCached);
