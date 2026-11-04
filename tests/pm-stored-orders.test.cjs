@@ -3,13 +3,13 @@ const assert=require('node:assert/strict'),register=require('../pm-stored-orders
 let rows,reads=0,queries=[],fail=false;
 const copy=v=>structuredClone(v),snapshot=(id,data)=>({id,exists:!!data,data:()=>copy(data)});
 class Query{
- constructor(filters=[],mask=null,order='__name__',after=null,n=Infinity){Object.assign(this,{filters,mask,order,after,n});}
- where(k,op,v){return new Query([...this.filters,[k,op,v]],this.mask,this.order,this.after,this.n);}
- select(...mask){return new Query(this.filters,mask,this.order,this.after,this.n);}
- orderBy(k){return new Query(this.filters,this.mask,k,this.after,this.n);}
- startAfter(doc){return new Query(this.filters,this.mask,this.order,doc.id,this.n);}
- limit(n){return new Query(this.filters,this.mask,this.order,this.after,n);}
- values(){return Object.entries(rows).filter(([id,r])=>this.filters.every(([k,op,v])=>{const value=k==='__name__'?id:r[k];if(value===undefined)return false;if(op==='in')return v.includes(value);if((v instanceof Date)!==(value instanceof Date))return false;return op==='=='?value===v:op==='>='?value>=v:op==='>'?value>v:value<v;})).filter(([id,r])=>this.order==='__name__'||r[this.order]!==undefined).sort(([a,ar],[b,br])=>{const av=this.order==='__name__'?a:ar[this.order],bv=this.order==='__name__'?b:br[this.order];return (av>bv?1:av<bv?-1:0)||a.localeCompare(b);});}
+ constructor(filters=[],mask=null,order='__name__',after=null,n=Infinity,direction='asc'){Object.assign(this,{filters,mask,order,after,n,direction});}
+ where(k,op,v){return new Query([...this.filters,[k,op,v]],this.mask,this.order,this.after,this.n,this.direction);}
+ select(...mask){return new Query(this.filters,mask,this.order,this.after,this.n,this.direction);}
+ orderBy(k,direction='asc'){return new Query(this.filters,this.mask,k,this.after,this.n,direction);}
+ startAfter(doc){return new Query(this.filters,this.mask,this.order,doc.id,this.n,this.direction);}
+ limit(n){return new Query(this.filters,this.mask,this.order,this.after,n,this.direction);}
+ values(){return Object.entries(rows).filter(([id,r])=>this.filters.every(([k,op,v])=>{const value=k==='__name__'?id:r[k];if(value===undefined)return false;if(op==='in')return v.includes(value);if((v instanceof Date)!==(value instanceof Date))return false;return op==='=='?value===v:op==='>='?value>=v:op==='>'?value>v:value<v;})).filter(([id,r])=>this.order==='__name__'||r[this.order]!==undefined).sort(([a,ar],[b,br])=>{const av=this.order==='__name__'?a:ar[this.order],bv=this.order==='__name__'?b:br[this.order];return ((av>bv?1:av<bv?-1:0)||a.localeCompare(b))*(this.direction==='desc'?-1:1);});}
  async get(){if(fail)throw Error('isolated DB failure');queries.push({filters:this.filters,mask:this.mask});let out=this.values();if(this.after)out=out.slice(out.findIndex(([id])=>id===this.after)+1);out=out.slice(0,this.n);reads+=out.length;return {docs:out.map(([id,r])=>snapshot(id,this.mask?Object.fromEntries(this.mask.filter(k=>r[k]!==undefined).map(k=>[k,r[k]])):r))};}
  doc(id){return {get:async()=>{if(fail)throw Error('isolated DB failure');reads+=rows[id]?1:0;return snapshot(id,rows[id]);}};}
  count(){return {get:async()=>({data:()=>({count:this.values().length})})};}
@@ -36,7 +36,7 @@ async function route(path,query){let status=200,body,headers={};const res={set:(
  rows[id].claimStatus='CANCEL_DONE';service.invalidate();assert.equal((await service.list({...base,keyword:id},'adminA')).total,0);rows=copy(before);service.invalidate();
  const matches=await service.list({...base,sort:'matchedOnly'},'adminA');assert.equal(matches.total,1);assert.equal(matches.orders[0].productOrderId,id);
  const old=await service.list({startDate:'2026-01-01',endDate:'2026-01-01',pageSize:50},'adminA');assert.equal(old.total,2500);assert.equal(old.orders.length,50);assert(old.nextCursor);assert(!JSON.stringify(old).includes('doNotReturn'));
- const full=await service.list({pageSize:50},'adminA');assert.equal(full.total,2576);assert.equal(full.orders.length,50);const fullNext=await service.list({pageSize:50,cursor:full.nextCursor},'adminA');assert.equal(new Set([...full.orders,...fullNext.orders].map(r=>r.id)).size,100);
+ const full=await service.list({pageSize:50},'adminA');assert.equal(full.total,2576);assert(full.metrics.partitions<=32);assert.equal(full.orders.length,50);const fullNext=await service.list({pageSize:50,cursor:full.nextCursor},'adminA');assert.equal(new Set([...full.orders,...fullNext.orders].map(r=>r.id)).size,100);
  const all=await service.list({keyword:id},'adminA');assert.equal(all.total,1);assert.equal(all.metrics.documentsRead,1);assert.equal((await service.list({...base,keyword:'없는 이름'},'adminA')).total,0);
  const bad=await route('/stored/admin/naver-orders',{startDate:'2026-02-30'});assert.equal(bad.status,400);assert.equal((await route('/stored/admin/naver-orders',{sort:'unsupported'})).status,400);
  const countBefore=queries.length;service.invalidate();await Promise.all([service.list({...base,fresh:'1'},'adminA'),service.list({...base,fresh:'1'},'adminA')]);const count=queries.length-countBefore;assert.equal(count,14);const afterCached=queries.length;await service.list(base,'adminA');assert.equal(queries.length,afterCached+5);await service.list(base,'adminB');assert(queries.length>afterCached);
