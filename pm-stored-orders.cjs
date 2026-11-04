@@ -32,7 +32,7 @@ module.exports=function register(app,{requireFirebaseAdmin,admin,initFirebaseAdm
  async function catalog(q,actor){
   if(quotaBlockedUntil>Date.now())throw Object.assign(Error('STORED_READ_QUOTA'),{code:8,status:503});
   const fullFields=!!q.keyword||q.sort==='receiverGroup',fields=fullFields?FIELDS:INDEX_FIELDS;
-  const key=JSON.stringify([actor,fullFields?'display':'index',q.startDate,q.endDate,/^\d{10,25}$|^\d{6}-\d{6}$/.test(normalize(q.keyword))?normalize(q.keyword):'']);
+  const key=JSON.stringify([actor,fullFields?'display':'index',q.startDate,q.endDate,/^\d{10,25}$/.test(normalize(q.keyword))?normalize(q.keyword):'']);
   const old=cache.get(key);if(old&&(old.pending||old.expires>Date.now()&&!q.fresh))return {...await old.promise,cacheHit:true};
   const generation=revision,progress={stage:'starting',queries:0,documents:0,startedAt:Date.now(),projection:fullFields?'display':'index'};
   const promise=(async()=>{
@@ -43,8 +43,6 @@ module.exports=function register(app,{requireFirebaseAdmin,admin,initFirebaseAdm
    if(/^\d{10,25}$/.test(keyword)){
     const doc=await collection.doc(keyword).get();metrics.queryCount++;if(doc.exists){metrics.documentsRead++;add(doc);}
     await Promise.all(['orderNo','orderId'].map(k=>read(collection.where(k,'==',keyword))));
-   }else if(/^\d{6}-\d{6}$/.test(keyword)){
-    await Promise.all(['matchedEstimateNo','estimateNo'].map(k=>read(collection.where(k,'==',keyword))));
    }else if(q.startDate||q.endDate){
     // Each branch uses one indexed date field, before reading metadata. Union preserves old date representations.
     const plans=[['paymentDate','raw'],['orderDate','raw'],['paymentDateYmd','day'],['orderDateYmd','day'],['createdAtLocal','raw'],['createdAtIso','raw'],['lastSyncedAt','timestamp'],['createdAt','timestamp'],['updatedAt','timestamp']];
