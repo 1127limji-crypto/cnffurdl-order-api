@@ -3,6 +3,7 @@ const {createHash}=require('node:crypto');
 const VERSION='stored-nav-orders-20261104-v1';
 const DISPLAY=['productOrderId','orderNo','orderId','matchedEstimateNo','estimateNo','matchType','buyerName','orderName','productName','optionInfo','optionCode','quantity','amount','productOrderStatus','productOrderStatusLabel','status','statusLabel','placeOrderLabel','claimStatus','claimStatusLabel','claimType','shippingMemo','paymentDate','orderDate'];
 const FIELDS=[...DISPLAY,'paymentDateYmd','orderDateYmd','localDate','dateYmd','createdAtLocal','createdAtIso','lastSyncedAt','createdAt','updatedAt','receiverName','receiverTel1','baseAddress'];
+const INDEX_FIELDS=FIELDS.filter(k=>!['buyerName','orderName','productName','optionInfo','optionCode','shippingMemo','receiverName','receiverTel1','baseAddress','placeOrderLabel','productOrderStatusLabel','statusLabel'].includes(k));
 const normalize=v=>String(v||'').normalize('NFKC').toLowerCase().trim();
 const koreanDate=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'});
 const day=v=>{const t=v?.toDate?.()||new Date(v);return Number.isFinite(+t)?koreanDate.format(t):'';};
@@ -22,17 +23,18 @@ function compare(sort){
 function filtered(rows,q){const keyword=normalize(q.keyword);return rows.filter(r=>{const d=storedDay(r);return !excluded(r)&&(!q.startDate||d>=q.startDate)&&(!q.endDate||d&&d<=q.endDate)&&(q.sort!=='matchedOnly'||r.matchedEstimateNo||r.estimateNo)&&(!keyword||DISPLAY.map(k=>normalize(r[k])).join(' ').includes(keyword));}).sort(compare(q.sort));}
 function project(doc,fields=FIELDS){const data=doc.data(),row={id:doc.id};for(const k of fields)if(data[k]!==undefined)row[k]=data[k];return row;}
 module.exports=function register(app,{requireFirebaseAdmin,admin,initFirebaseAdmin}){
- const cache=new Map();let revision=0;
+ const cache=new Map(),listFlights=new Map();let revision=0;
  const db=()=>{initFirebaseAdmin();return admin.firestore();};
  const invalidate=()=>{revision++;cache.clear();};
  async function catalog(q,actor){
-  const key=JSON.stringify([actor,q.startDate,q.endDate,/^\d{10,25}$|^\d{6}-\d{6}$/.test(normalize(q.keyword))?normalize(q.keyword):'']);
-  const old=cache.get(key);if(old&&(old.pending||old.expires>Date.now()&&!q.fresh))return old.promise;
-  const generation=revision;
+  const fullFields=!!q.keyword||q.sort==='receiverGroup',fields=fullFields?FIELDS:INDEX_FIELDS;
+  const key=JSON.stringify([actor,fullFields?'display':'index',q.startDate,q.endDate,/^\d{10,25}$|^\d{6}-\d{6}$/.test(normalize(q.keyword))?normalize(q.keyword):'']);
+  const old=cache.get(key);if(old&&(old.pending||old.expires>Date.now()&&!q.fresh))return {...await old.promise,cacheHit:true};
+  const generation=revision,progress={stage:'starting',queries:0,documents:0,startedAt:Date.now(),projection:fullFields?'display':'index'};
   const promise=(async()=>{
    const collection=db().collection('naverOrders'),rows=new Map(),metrics={queryCount:0,documentsRead:0},started=Date.now();
    const add=doc=>{if(doc?.exists!==false){const row=project(doc);rows.set(row.id,row);}};
-   async function read(query,{byId=false}={}){let after=null;for(;;){const next=after?(byId?query.where(admin.firestore.FieldPath.documentId(),'>',after.id):query.startAfter(after)):query;const snap=await next.select(...FIELDS).limit(500).get();metrics.queryCount++;metrics.documentsRead+=snap.docs.length;for(const doc of snap.docs)add(doc);if(snap.docs.length<500)break;const last=snap.docs.at(-1);if(after&&last.id===after.id)throw Error('STORED_CURSOR_DID_NOT_ADVANCE');after=last;}}
+   async function read(query,{byId=false}={}){let after=null;for(;;){const next=after?(byId?query.where(admin.firestore.FieldPath.documentId(),'>',after.id):query.startAfter(after)):query;progress.stage='database-query';const snap=await next.select(...fields).limit(250).get();metrics.queryCount++;metrics.documentsRead+=snap.docs.length;progress.queries=metrics.queryCount;progress.documents=metrics.documentsRead;progress.stage='projecting';for(const doc of snap.docs)add(doc);if(snap.docs.length<250)break;const last=snap.docs.at(-1);if(after&&last.id===after.id)throw Error('STORED_CURSOR_DID_NOT_ADVANCE');after=last;}}
    const keyword=normalize(q.keyword);
    if(/^\d{10,25}$/.test(keyword)){
     const doc=await collection.doc(keyword).get();metrics.queryCount++;if(doc.exists){metrics.documentsRead++;add(doc);}
@@ -48,23 +50,25 @@ module.exports=function register(app,{requireFirebaseAdmin,admin,initFirebaseAdm
      await read(query.orderBy(field));
     }}));
    }else await read(collection,{byId:true});
-   const measured={...metrics,uniqueDocuments:rows.size,databaseMs:Date.now()-started};console.info('[stored-orders-db]',JSON.stringify(measured));return {rows:[...rows.values()],metrics:measured,generatedAt:new Date().toISOString(),generation};
+   const measured={...metrics,uniqueDocuments:rows.size,databaseMs:Date.now()-started};console.info('[stored-orders-db]',JSON.stringify(measured));progress.stage='catalog-ready';return {rows:[...rows.values()],metrics:measured,generatedAt:new Date().toISOString(),generation,fullFields,progress};
   })();
-  cache.set(key,{promise,pending:true,expires:Date.now()+15000});if(cache.size>6)cache.delete(cache.keys().next().value);
-  try{const value=await promise;const entry=cache.get(key);if(entry?.promise===promise){entry.pending=false;entry.expires=Date.now()+15000;}return value;}catch(e){if(cache.get(key)?.promise===promise)cache.delete(key);throw e;}
+  cache.set(key,{promise,pending:true,progress,expires:Date.now()+15000});if(cache.size>6)cache.delete(cache.keys().next().value);
+  try{const value=await promise;const entry=cache.get(key);if(entry?.promise===promise){entry.pending=false;entry.expires=Date.now()+15000;}return {...value,cacheHit:false};}catch(e){progress.stage='failed';progress.errorCode=e.code||'QUERY_FAILED';if(cache.get(key)?.promise===promise)cache.delete(key);throw e;}
  }
- async function list(input,actor){
+ async function listOnce(input,actor){
   const q={startDate:String(input.startDate||''),endDate:String(input.endDate||''),keyword:String(input.keyword||''),sort:String(input.sort||'paymentDesc'),fresh:input.fresh==='1'};
   if([q.startDate,q.endDate].some(d=>d&&(!/^\d{4}-\d{2}-\d{2}$/.test(d)||day(d+'T12:00:00+09:00')!==d))||q.startDate&&q.endDate&&q.startDate>q.endDate||q.keyword.length>200)throw Object.assign(Error('INVALID_QUERY'),{status:400});compare(q.sort);
   const scope=createHash('sha256').update(JSON.stringify([actor,q.startDate,q.endDate,normalize(q.keyword),q.sort])).digest('hex').slice(0,24),pageSize=Math.max(1,Math.min(50,Number.parseInt(input.pageSize)||30));
   let cursor=null;if(input.cursor){try{cursor=JSON.parse(Buffer.from(input.cursor,'base64url').toString());if(cursor.scope!==scope||!cursor.id)throw Error();}catch{throw Object.assign(Error('CURSOR_CONDITION_CHANGED'),{status:409});}}
-  const result=await catalog(q,actor),rows=filtered(result.rows,q);let offset=0;
+  const result=await catalog(q,actor);result.progress.stage='filter-sort';const rows=filtered(result.rows,q),metrics={...result.metrics,queryCount:result.cacheHit?0:result.metrics.queryCount,documentsRead:result.cacheHit?0:result.metrics.documentsRead,catalogCacheHit:result.cacheHit};let offset=0;
   if(cursor){const i=rows.findIndex(r=>r.id===cursor.id);if(i<0)throw Object.assign(Error('CURSOR_ITEM_CHANGED'),{status:409});offset=i+1;}
-  const pageRows=rows.slice(offset,offset+pageSize),last=pageRows.at(-1),hasMore=offset+pageRows.length<rows.length;
-  return {ok:true,version:VERSION,orders:pageRows.map(r=>Object.fromEntries(['id',...DISPLAY].filter(k=>r[k]!==undefined).map(k=>[k,r[k]]))),total:rows.length,totalAmount:rows.reduce((n,r)=>n+(Number(r.amount)||0),0),pageSize,offset,hasMore,nextCursor:hasMore?Buffer.from(JSON.stringify({scope,id:last.id})).toString('base64url'):null,generatedAt:result.generatedAt,metrics:{...result.metrics,returnedDocuments:pageRows.length},source:'stored-firestore-readonly',dateBasis:'paymentDate/orderDate; Asia/Seoul; end inclusive'};
+  let pageRows=rows.slice(offset,offset+pageSize);const last=pageRows.at(-1),hasMore=offset+pageRows.length<rows.length;
+  if(!result.fullFields&&pageRows.length){result.progress.stage='page-details';const detail=new Map(),batches=[];for(let n=0;n<pageRows.length;n+=10)batches.push(pageRows.slice(n,n+10));let next=0;await Promise.all(Array.from({length:Math.min(2,batches.length)},async()=>{while(next<batches.length){const batch=batches[next++],snapshot=await db().collection('naverOrders').where(admin.firestore.FieldPath.documentId(),'in',batch.map(r=>r.id)).select(...DISPLAY).get();metrics.queryCount++;metrics.documentsRead+=snapshot.docs.length;for(const doc of snapshot.docs)detail.set(doc.id,project(doc,DISPLAY));}}));if(detail.size!==pageRows.length)throw Object.assign(Error('STORED_PAGE_CHANGED'),{status:409});pageRows=pageRows.map(r=>detail.get(r.id));}result.progress.stage='done';
+  return {ok:true,version:VERSION,orders:pageRows.map(r=>Object.fromEntries(['id',...DISPLAY].filter(k=>r[k]!==undefined).map(k=>[k,r[k]]))),total:rows.length,totalAmount:rows.reduce((n,r)=>n+(Number(r.amount)||0),0),pageSize,offset,hasMore,nextCursor:hasMore?Buffer.from(JSON.stringify({scope,id:last.id})).toString('base64url'):null,generatedAt:result.generatedAt,metrics:{...metrics,returnedDocuments:pageRows.length},source:'stored-firestore-readonly',dateBasis:'paymentDate/orderDate; Asia/Seoul; end inclusive'};
  }
+ async function list(input,actor){const key=JSON.stringify([revision,actor,input.startDate||'',input.endDate||'',normalize(input.keyword),input.sort||'paymentDesc',String(input.pageSize||30),input.cursor||'',input.fresh==='1']);if(listFlights.has(key))return listFlights.get(key);const promise=listOnce(input,actor);listFlights.set(key,promise);try{return await promise;}finally{if(listFlights.get(key)===promise)listFlights.delete(key);}}
  app.get('/stored/admin/naver-orders',requireFirebaseAdmin,async(req,res)=>{try{res.set('Cache-Control','private, no-store').json(await list(req.query,req.adminUser.email));}catch(e){res.status(e.status||502).json({ok:false,message:e.status===400?'조회 조건을 확인해주세요.':e.status===409?'조회 조건이나 목록이 바뀌었습니다. 처음 페이지부터 다시 조회해주세요.':'저장 주문 조회에 실패했습니다. 다시 조회해주세요.',code:e.status?e.message:'STORED_QUERY_FAILED'});}});
- app.get('/stored/admin/naver-orders/diagnostic',requireFirebaseAdmin,async(req,res)=>{try{const id=String(req.query.productOrderId||'');if(!/^\d{10,25}$/.test(id))return res.status(400).json({ok:false});const collection=db().collection('naverOrders');const [doc,count,total]=await Promise.all([collection.doc(id).get(),collection.where(admin.firestore.FieldPath.documentId(),'<',id).count().get(),collection.count().get()]);const probeQuery=collection.select('paymentDate').limit(2),probeA=await probeQuery.get(),probeB=probeA.docs.length?await probeQuery.startAfter(probeA.docs.at(-1)).get():{docs:[]};const cursorProbe={first:probeA.docs.length,next:probeB.docs.length,repeated:probeB.docs.some(d=>probeA.docs.some(a=>a.id===d.id))};const before=count.data().count;res.set('Cache-Control','private, no-store').json({ok:true,version:VERSION,exists:doc.exists,cursorProbe,totalStoredDocuments:total.data().count,earlierDocumentIds:before,oldLimit:2000,excludedByOldLimit:doc.exists&&before>=2000,order:doc.exists?project(doc,['productOrderId','orderNo','paymentDate','matchedEstimateNo','quantity','amount']):null});}catch{res.status(502).json({ok:false,message:'저장 주문 진단 조회 실패'});}});
+ app.get('/stored/admin/naver-orders/diagnostic',requireFirebaseAdmin,async(req,res)=>{try{const id=String(req.query.productOrderId||'');if(!/^\d{10,25}$/.test(id))return res.status(400).json({ok:false});const collection=db().collection('naverOrders');const [doc,count,total]=await Promise.all([collection.doc(id).get(),collection.where(admin.firestore.FieldPath.documentId(),'<',id).count().get(),collection.count().get()]);const probeQuery=collection.select('paymentDate').limit(2),probeA=await probeQuery.get(),probeB=probeA.docs.length?await probeQuery.startAfter(probeA.docs.at(-1)).get():{docs:[]};const cursorProbe={first:probeA.docs.length,next:probeB.docs.length,repeated:probeB.docs.some(d=>probeA.docs.some(a=>a.id===d.id))};const before=count.data().count;res.set('Cache-Control','private, no-store').json({ok:true,version:VERSION,exists:doc.exists,cursorProbe,readProgress:[...cache.values()].map(e=>({...e.progress,pending:e.pending,elapsedMs:Date.now()-e.progress.startedAt})),totalStoredDocuments:total.data().count,earlierDocumentIds:before,oldLimit:2000,excludedByOldLimit:doc.exists&&before>=2000,order:doc.exists?project(doc,['productOrderId','orderNo','paymentDate','matchedEstimateNo','quantity','amount']):null});}catch{res.status(502).json({ok:false,message:'저장 주문 진단 조회 실패'});}});
  return {list,invalidate,version:VERSION};
 };
 module.exports.storedDay=storedDay;module.exports.filtered=filtered;module.exports.compare=compare;
