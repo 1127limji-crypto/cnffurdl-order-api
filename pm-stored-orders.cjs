@@ -4,7 +4,8 @@ const VERSION='stored-nav-orders-20261104-v1';
 const DISPLAY=['productOrderId','orderNo','orderId','matchedEstimateNo','estimateNo','matchType','buyerName','orderName','productName','optionInfo','optionCode','quantity','amount','productOrderStatus','productOrderStatusLabel','status','statusLabel','placeOrderLabel','claimStatus','claimStatusLabel','claimType','shippingMemo','paymentDate','orderDate'];
 const FIELDS=[...DISPLAY,'paymentDateYmd','orderDateYmd','localDate','dateYmd','createdAtLocal','createdAtIso','lastSyncedAt','createdAt','updatedAt','receiverName','receiverTel1','baseAddress'];
 const normalize=v=>String(v||'').normalize('NFKC').toLowerCase().trim();
-const day=v=>{const t=v?.toDate?.()||new Date(v);return Number.isFinite(+t)?new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(t):'';};
+const koreanDate=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'});
+const day=v=>{const t=v?.toDate?.()||new Date(v);return Number.isFinite(+t)?koreanDate.format(t):'';};
 const shift=(d,n)=>day(new Date(Date.parse(d+'T12:00:00+09:00')+n*86400000));
 function storedDay(r){
  for(const k of ['paymentDate','orderDate'])if(r[k]){const d=day(r[k]);if(d)return d;}
@@ -47,7 +48,7 @@ module.exports=function register(app,{requireFirebaseAdmin,admin,initFirebaseAdm
      await read(query.orderBy(field));
     }}));
    }else await read(collection.orderBy(admin.firestore.FieldPath.documentId()));
-   return {rows:[...rows.values()],metrics:{...metrics,uniqueDocuments:rows.size,databaseMs:Date.now()-started},generatedAt:new Date().toISOString(),generation};
+   const measured={...metrics,uniqueDocuments:rows.size,databaseMs:Date.now()-started};console.info('[stored-orders-db]',JSON.stringify(measured));return {rows:[...rows.values()],metrics:measured,generatedAt:new Date().toISOString(),generation};
   })();
   cache.set(key,{promise,pending:true,expires:Date.now()+15000});if(cache.size>6)cache.delete(cache.keys().next().value);
   try{const value=await promise;const entry=cache.get(key);if(entry?.promise===promise){entry.pending=false;entry.expires=Date.now()+15000;}return value;}catch(e){if(cache.get(key)?.promise===promise)cache.delete(key);throw e;}
@@ -63,7 +64,7 @@ module.exports=function register(app,{requireFirebaseAdmin,admin,initFirebaseAdm
   return {ok:true,version:VERSION,orders:pageRows.map(r=>Object.fromEntries(['id',...DISPLAY].filter(k=>r[k]!==undefined).map(k=>[k,r[k]]))),total:rows.length,totalAmount:rows.reduce((n,r)=>n+(Number(r.amount)||0),0),pageSize,offset,hasMore,nextCursor:hasMore?Buffer.from(JSON.stringify({scope,id:last.id})).toString('base64url'):null,generatedAt:result.generatedAt,metrics:{...result.metrics,returnedDocuments:pageRows.length},source:'stored-firestore-readonly',dateBasis:'paymentDate/orderDate; Asia/Seoul; end inclusive'};
  }
  app.get('/stored/admin/naver-orders',requireFirebaseAdmin,async(req,res)=>{try{res.set('Cache-Control','private, no-store').json(await list(req.query,req.adminUser.email));}catch(e){res.status(e.status||502).json({ok:false,message:e.status===400?'조회 조건을 확인해주세요.':e.status===409?'조회 조건이나 목록이 바뀌었습니다. 처음 페이지부터 다시 조회해주세요.':'저장 주문 조회에 실패했습니다. 다시 조회해주세요.',code:e.status?e.message:'STORED_QUERY_FAILED'});}});
- app.get('/stored/admin/naver-orders/diagnostic',requireFirebaseAdmin,async(req,res)=>{try{const id=String(req.query.productOrderId||'');if(!/^\d{10,25}$/.test(id))return res.status(400).json({ok:false});const collection=db().collection('naverOrders');const [doc,count]=await Promise.all([collection.doc(id).get(),collection.where(admin.firestore.FieldPath.documentId(),'<',id).count().get()]);const before=count.data().count;res.set('Cache-Control','private, no-store').json({ok:true,version:VERSION,exists:doc.exists,earlierDocumentIds:before,oldLimit:2000,excludedByOldLimit:doc.exists&&before>=2000,order:doc.exists?project(doc,['productOrderId','orderNo','paymentDate','matchedEstimateNo','quantity','amount']):null});}catch{res.status(502).json({ok:false,message:'저장 주문 진단 조회 실패'});}});
+ app.get('/stored/admin/naver-orders/diagnostic',requireFirebaseAdmin,async(req,res)=>{try{const id=String(req.query.productOrderId||'');if(!/^\d{10,25}$/.test(id))return res.status(400).json({ok:false});const collection=db().collection('naverOrders');const [doc,count,total]=await Promise.all([collection.doc(id).get(),collection.where(admin.firestore.FieldPath.documentId(),'<',id).count().get(),collection.count().get()]);const before=count.data().count;res.set('Cache-Control','private, no-store').json({ok:true,version:VERSION,exists:doc.exists,totalStoredDocuments:total.data().count,earlierDocumentIds:before,oldLimit:2000,excludedByOldLimit:doc.exists&&before>=2000,order:doc.exists?project(doc,['productOrderId','orderNo','paymentDate','matchedEstimateNo','quantity','amount']):null});}catch{res.status(502).json({ok:false,message:'저장 주문 진단 조회 실패'});}});
  return {list,invalidate,version:VERSION};
 };
 module.exports.storedDay=storedDay;module.exports.filtered=filtered;module.exports.compare=compare;
