@@ -842,113 +842,11 @@ function getNaverBuyerName(row) {
 }
 
 async function matchNaverOrdersToEstimates(orders, source = "auto") {
-  initFirebaseAdmin();
-
-  if (!orders || !orders.length) {
-    return { matchedCount: 0, candidatesCount: 0, results: [] };
-  }
-
-  const db = admin.firestore();
-  const estimatesRef = db.collection("estimates");
-  const results = [];
-  let matchedCount = 0;
-  let candidatesCount = 0;
-
-  for (const order of orders) {
-    const productOrderId = String(order.productOrderId || "").trim();
-    if (!productOrderId) continue;
-
-    const estimateNo = extractEstimateNoFromText(
-      order.estimateNo,
-      order.optionInfo,
-      order.optionCode,
-      order.shippingMemo,
-      order.productName,
-      order.orderNo,
-      order.raw ? JSON.stringify(order.raw).slice(0, 3000) : ""
-    );
-
-    let matchedEstimate = null;
-    let matchType = "";
-    let candidateEstimates = [];
-
-    if (estimateNo) {
-      const snapshot = await estimatesRef.where("estimateNo", "==", estimateNo).limit(1).get();
-      if (!snapshot.empty) {
-        matchedEstimate = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
-        matchType = "estimateNo";
-      }
-    }
-
-    if (!matchedEstimate) {
-      const amount = getNaverOrderAmount(order);
-      const buyerName = normalizeName(getNaverBuyerName(order));
-
-      if (amount && buyerName) {
-        const snapshot = await estimatesRef
-          .where("totalPrice", "==", amount)
-          .limit(20)
-          .get();
-
-        candidateEstimates = snapshot.docs
-          .map((doc) => ({ id: doc.id, ...doc.data() }))
-          .filter((estimate) => normalizeName(getEstimateCustomerName(estimate)) === buyerName);
-
-        if (candidateEstimates.length === 1) {
-          matchedEstimate = candidateEstimates[0];
-          matchType = "buyerNameAmount";
-        } else if (candidateEstimates.length > 1) {
-          candidatesCount++;
-        }
-      }
-    }
-
-    if (matchedEstimate) {
-      const estimateDocRef = estimatesRef.doc(matchedEstimate.id);
-      const orderDocRef = db.collection("naverOrders").doc(productOrderId);
-
-      const matchPayload = {
-        matchedEstimateId: matchedEstimate.id,
-        matchedEstimateNo: matchedEstimate.estimateNo || estimateNo || "",
-        matchedNaverProductOrderId: productOrderId,
-        matchedNaverOrderNo: order.orderNo || order.orderId || "",
-        matchedNaverAmount: getNaverOrderAmount(order),
-        matchedNaverBuyerName: getNaverBuyerName(order),
-        matchType,
-        matchedAt: admin.firestore.FieldValue.serverTimestamp(),
-        matchedBy: source,
-        orderStatus: "PAID",
-        orderStatusLabel: "결제완료",
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      };
-
-      await estimateDocRef.set(matchPayload, { merge: true });
-
-      await orderDocRef.set({
-        matchedEstimateId: matchedEstimate.id,
-        matchedEstimateNo: matchedEstimate.estimateNo || estimateNo || "",
-        matchType,
-        matchedAt: admin.firestore.FieldValue.serverTimestamp()
-      }, { merge: true });
-
-      matchedCount++;
-      results.push({
-        productOrderId,
-        estimateId: matchedEstimate.id,
-        estimateNo: matchedEstimate.estimateNo || estimateNo || "",
-        matchType
-      });
-    } else {
-      results.push({
-        productOrderId,
-        estimateNo,
-        matchType: "",
-        candidatesCount: candidateEstimates.length || 0
-      });
-    }
-  }
-
-  return { matchedCount, candidatesCount, results };
+ const results=[];let matchedCount=0,candidatesCount=0;
+ for(const order of orders||[]){const productOrderId=String(order.productOrderId||'');if(!productOrderId)continue;const numbers=require('./pm-estimate-match.cjs').refs(order.optionInfo||order.optionCode||'');if(numbers.length!==1){results.push({productOrderId,matchType:'',code:numbers.length?'AMBIGUOUS_OPTION_ESTIMATES':'EXPLICIT_ESTIMATE_NUMBER_REQUIRED'});if(numbers.length)candidatesCount++;continue;}
+  try{const value=await pmEstimateService.reconcile({estimateNo:numbers[0],productOrderId,orderNo:String(order.orderNo||order.orderId||''),mode:'automatic',actor:source});matchedCount++;results.push({...value,matchType:'auto_option'});}catch(e){candidatesCount++;results.push({productOrderId,estimateNo:numbers[0],matchType:'',code:e.code||'SOURCE_MATCH_FAILED'});}
+ }
+ return {matchedCount,candidatesCount,results};
 }
 
 
@@ -2261,51 +2159,14 @@ app.post("/stored/match-estimate-naver", requireFirebaseAdmin, async (req, res) 
       });
     }
 
-    const db = admin.firestore();
-    const estimateRef = db.collection("estimates").doc(estimateId);
-    const orderRef = db.collection("naverOrders").doc(productOrderId);
-
-    const [estimateSnap, orderSnap] = await Promise.all([estimateRef.get(), orderRef.get()]);
-
-    if (!estimateSnap.exists) {
-      return res.status(404).json({ ok: false, message: "견적서를 찾을 수 없습니다." });
-    }
-
-    if (!orderSnap.exists) {
-      return res.status(404).json({ ok: false, message: "네이버 주문을 찾을 수 없습니다." });
-    }
-
-    const estimate = estimateSnap.data();
-    const order = orderSnap.data();
-
-    await estimateRef.set({
-      matchedEstimateNo: estimate.estimateNo || "",
-      matchedNaverProductOrderId: productOrderId,
-      matchedNaverOrderNo: order.orderNo || order.orderId || "",
-      matchedNaverAmount: getNaverOrderAmount(order),
-      matchedNaverBuyerName: getNaverBuyerName(order),
-      matchType: "manual",
-      matchedAt: admin.firestore.FieldValue.serverTimestamp(),
-      matchedBy: req.adminUser.email,
-      orderStatus: "PAID",
-      orderStatusLabel: "결제완료",
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedBy: req.adminUser.email
-    }, { merge: true });
-
-    await orderRef.set({
-      matchedEstimateId: estimateId,
-      matchedEstimateNo: estimate.estimateNo || "",
-      matchType: "manual",
-      matchedAt: admin.firestore.FieldValue.serverTimestamp(),
-      matchedBy: req.adminUser.email
-    }, { merge: true });
+    const verified = await pmEstimateService.reconcile({estimateId,productOrderId,mode:'manual',actor:req.adminUser.email});
 
     res.json({
       ok: true,
       message: "견적서와 네이버 주문 매칭 완료",
       estimateId,
-      productOrderId
+      productOrderId,
+      verified
     });
   } catch (error) {
     res.status(error.status || 500).json({
@@ -3859,4 +3720,5 @@ app.listen(PORT, () => {
   console.log(`cnffurdl-order-api running on port ${PORT}`);
 });
 
-require('./pm-estimates.cjs')(app, { requireFirebaseAdmin, admin, initFirebaseAdmin });
+const pmEstimateService = require('./pm-estimates.cjs')(app, { requireFirebaseAdmin, admin, initFirebaseAdmin, readNaver: async ids => (await getProductOrderDetailsByIds(ids, {})).map(extractSimpleOrder) });
+
