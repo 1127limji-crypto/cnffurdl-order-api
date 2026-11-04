@@ -23,7 +23,7 @@ function compare(sort){
 function filtered(rows,q){const keyword=normalize(q.keyword);return rows.filter(r=>{const d=storedDay(r);return !excluded(r)&&(!q.startDate||d>=q.startDate)&&(!q.endDate||d&&d<=q.endDate)&&(q.sort!=='matchedOnly'||r.matchedEstimateNo||r.estimateNo)&&(!keyword||DISPLAY.map(k=>normalize(r[k])).join(' ').includes(keyword));}).sort(compare(q.sort));}
 function project(doc,fields=FIELDS){const data=doc.data(),row={id:doc.id};for(const k of fields)if(data[k]!==undefined)row[k]=data[k];return row;}
 module.exports=function register(app,{requireFirebaseAdmin,admin,initFirebaseAdmin}){
- const cache=new Map(),listFlights=new Map(),failures=[];let revision=0;
+ const cache=new Map(),listFlights=new Map(),failures=[];let revision=0,maxSeenId='';
  const db=()=>{initFirebaseAdmin();return admin.firestore();};
  const invalidate=()=>{revision++;cache.clear();};
  async function catalog(q,actor){
@@ -33,7 +33,7 @@ module.exports=function register(app,{requireFirebaseAdmin,admin,initFirebaseAdm
   const generation=revision,progress={stage:'starting',queries:0,documents:0,startedAt:Date.now(),projection:fullFields?'display':'index'};
   const promise=(async()=>{
    const collection=db().collection('naverOrders'),rows=new Map(),metrics={queryCount:0,documentsRead:0},started=Date.now();
-   const add=doc=>{if(doc?.exists!==false){const row=project(doc);rows.set(row.id,row);}};
+   const add=doc=>{if(doc?.exists!==false){const row=project(doc);rows.set(row.id,row);if(/^\d{10,25}$/.test(row.id)&&row.id>maxSeenId)maxSeenId=row.id;}};
    async function read(query,{byId=false}={}){let after=null;for(;;){const next=after?(byId?query.where(admin.firestore.FieldPath.documentId(),'>',after.id):query.startAfter(after)):query;progress.stage='database-query';const snap=await next.select(...fields).limit(250).get();metrics.queryCount++;metrics.documentsRead+=snap.docs.length;progress.queries=metrics.queryCount;progress.documents=metrics.documentsRead;progress.stage='projecting';for(const doc of snap.docs)add(doc);if(snap.docs.length<250)break;const last=snap.docs.at(-1);if(after&&last.id===after.id)throw Error('STORED_CURSOR_DID_NOT_ADVANCE');after=last;}}
    const keyword=normalize(q.keyword);
    if(/^\d{10,25}$/.test(keyword)){
@@ -58,13 +58,15 @@ module.exports=function register(app,{requireFirebaseAdmin,admin,initFirebaseAdm
     if(first&&/^\d{10,25}$/.test(first)){
      const width=first.length,format=n=>n.toString().padStart(width,'0');
      function bounded(start,end){let query=collection;if(start!==null)query=query.where(field,'>=',format(start));if(end!==null)query=query.where(field,'<',format(end));return query;}
-     const queue=[{lo:BigInt(first),hi:10n**BigInt(width),start:null,end:null,count:total.data().count,depth:0,tight:true}];
+     // Hints choose pivots only: the outer ranges remain unbounded, including future/irregular IDs.
+     const calendar=day(new Date()).replace(/-/g,'')+'9'.repeat(width-8),hint=maxSeenId.length===width&&maxSeenId>first?maxSeenId:calendar,ceiling=BigInt(hint)>BigInt(first)?BigInt(hint)+1n:10n**BigInt(width);
+     const queue=[{lo:BigInt(first),hi:ceiling,start:null,end:null,count:total.data().count,depth:0,tight:true}];
      while(queue.length){const tasks=queue.splice(0,4);await Promise.all(tasks.map(async part=>{
       if(part.count===0)return;
       if(!part.tight&&part.count>240){const low=await bounded(part.start,part.end).select().limit(1).get();metrics.queryCount++;metrics.documentsRead+=low.docs.length;if(low.docs.length&&/^\d+$/.test(low.docs[0].id)){part.lo=BigInt(low.docs[0].id);}}
       if(part.count<=240||part.hi-part.lo<2n||part.depth>=55){partitions.push(bounded(part.start,part.end));return;}
       const middle=(part.lo+part.hi)/2n,snapshot=await bounded(part.start,middle).count().get();metrics.aggregationQueries++;const left=snapshot.data().count;
-      queue.push({...part,hi:middle,end:middle,count:left,depth:part.depth+1,tight:false},{...part,lo:middle,start:middle,count:Math.max(0,part.count-left),depth:part.depth+1,tight:false});
+      queue.push({...part,hi:middle,end:middle,count:left,depth:part.depth+1,tight:true},{...part,lo:middle,start:middle,count:Math.max(0,part.count-left),depth:part.depth+1,tight:false});
      }));}
     }else partitions.push(collection);
     metrics.partitions=partitions.length;let next=0;

@@ -25,7 +25,7 @@ function reset(){rows={};for(let n=0;n<2500;n++)rows['20260101'+String(n).padSta
  service.invalidate();reads=0;queries=[];fail=false;}
 async function route(path,query){let status=200,body,headers={};const res={set:(k,v)=>{headers[k]=v;return res;},status:n=>{status=n;return res;},json:b=>{body=b;return res;}};await routes.get(path)({query,adminUser:{email:'qa@example.test'}},res);return {status,body,headers};}
 (async()=>{
- reset();const before=copy(rows),base={startDate:'2026-11-04',endDate:'2026-11-04',pageSize:'50'};
+ reset();const cold=register(app,{requireFirebaseAdmin:guard,admin:{firestore},initFirebaseAdmin:()=>{}});assert.equal((await cold.list({pageSize:50},'coldAdmin')).total,2576);reset();const before=copy(rows),base={startDate:'2026-11-04',endDate:'2026-11-04',pageSize:'50'};
  const first=await service.list(base,'adminA');assert.equal(first.orders.length,50);assert.equal(first.total,76);assert.equal(first.orders.some(r=>r.productOrderId===id),false);assert(first.metrics.documentsRead<2500);assert(queries.every(q=>q.mask&&q.filters.length));assert(!JSON.stringify(first).includes('doNotReturn'));
  const second=await service.list({...base,cursor:first.nextCursor},'adminA');assert.equal(second.orders.length,26);assert.equal(new Set([...first.orders,...second.orders].map(r=>r.id)).size,76);assert.equal(second.hasMore,false);
  await assert.rejects(service.list({...base,keyword:'격리테스트',cursor:first.nextCursor},'adminA'),e=>e.status===409);await assert.rejects(service.list({...base,cursor:first.nextCursor},'adminB'),e=>e.status===409);
