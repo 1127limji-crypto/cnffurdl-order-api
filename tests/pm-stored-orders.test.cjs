@@ -6,7 +6,7 @@ class Query{
  constructor(filters=[],mask=null,order='__name__',after=null,n=Infinity,direction='asc'){Object.assign(this,{filters,mask,order,after,n,direction});}
  where(k,op,v){return new Query([...this.filters,[k,op,v]],this.mask,this.order,this.after,this.n,this.direction);}
  select(...mask){return new Query(this.filters,mask,this.order,this.after,this.n,this.direction);}
- orderBy(k,direction='asc'){return new Query(this.filters,this.mask,k,this.after,this.n,direction);}
+ orderBy(k,direction='asc'){assert(!(k==='__name__'&&direction==='desc'),'production has no descending document-ID index');return new Query(this.filters,this.mask,k,this.after,this.n,direction);}
  startAfter(doc){return new Query(this.filters,this.mask,this.order,doc.id,this.n,this.direction);}
  limit(n){return new Query(this.filters,this.mask,this.order,this.after,n,this.direction);}
  values(){return Object.entries(rows).filter(([id,r])=>this.filters.every(([k,op,v])=>{const value=k==='__name__'?id:r[k];if(value===undefined)return false;if(op==='in')return v.includes(value);if((v instanceof Date)!==(value instanceof Date))return false;return op==='=='?value===v:op==='>='?value>=v:op==='>'?value>v:value<v;})).filter(([id,r])=>this.order==='__name__'||r[this.order]!==undefined).sort(([a,ar],[b,br])=>{const av=this.order==='__name__'?a:ar[this.order],bv=this.order==='__name__'?b:br[this.order];return ((av>bv?1:av<bv?-1:0)||a.localeCompare(b))*(this.direction==='desc'?-1:1);});}

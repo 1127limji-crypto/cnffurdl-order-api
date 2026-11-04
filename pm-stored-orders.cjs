@@ -52,16 +52,16 @@ module.exports=function register(app,{requireFirebaseAdmin,admin,initFirebaseAdm
    }else {
     // Partition the indexed document-ID space; no offsets or repeated skipped-document reads.
     const field=admin.firestore.FieldPath.documentId();
-    const [low,high,total]=await Promise.all([collection.select().limit(1).get(),collection.orderBy(field,'desc').select().limit(1).get(),collection.count().get()]);
-    metrics.queryCount+=2;metrics.documentsRead+=low.docs.length+high.docs.length;metrics.aggregationQueries=1;
-    const first=low.docs[0]?.id,last=high.docs[0]?.id,partitions=[];
-    if(first&&last&&/^\d{10,25}$/.test(first)&&/^\d{10,25}$/.test(last)&&first.length===last.length){
+    const [low,total]=await Promise.all([collection.select().limit(1).get(),collection.count().get()]);
+    metrics.queryCount++;metrics.documentsRead+=low.docs.length;metrics.aggregationQueries=1;
+    const first=low.docs[0]?.id,partitions=[];
+    if(first&&/^\d{10,25}$/.test(first)){
      const width=first.length,format=n=>n.toString().padStart(width,'0');
      function bounded(start,end){let query=collection;if(start!==null)query=query.where(field,'>=',format(start));if(end!==null)query=query.where(field,'<',format(end));return query;}
-     const queue=[{lo:BigInt(first),hi:BigInt(last)+1n,start:null,end:null,count:total.data().count,depth:0,tight:true}];
+     const queue=[{lo:BigInt(first),hi:10n**BigInt(width),start:null,end:null,count:total.data().count,depth:0,tight:true}];
      while(queue.length){const tasks=queue.splice(0,4);await Promise.all(tasks.map(async part=>{
       if(part.count===0)return;
-      if(!part.tight&&part.count>240){const scoped=bounded(part.start,part.end),low=await scoped.select().limit(1).get(),high=await scoped.orderBy(field,'desc').select().limit(1).get();metrics.queryCount+=2;metrics.documentsRead+=low.docs.length+high.docs.length;if(low.docs.length&&high.docs.length&&/^\d+$/.test(low.docs[0].id)&&/^\d+$/.test(high.docs[0].id)){part.lo=BigInt(low.docs[0].id);part.hi=BigInt(high.docs[0].id)+1n;}}
+      if(!part.tight&&part.count>240){const low=await bounded(part.start,part.end).select().limit(1).get();metrics.queryCount++;metrics.documentsRead+=low.docs.length;if(low.docs.length&&/^\d+$/.test(low.docs[0].id)){part.lo=BigInt(low.docs[0].id);}}
       if(part.count<=240||part.hi-part.lo<2n||part.depth>=55){partitions.push(bounded(part.start,part.end));return;}
       const middle=(part.lo+part.hi)/2n,snapshot=await bounded(part.start,middle).count().get();metrics.aggregationQueries++;const left=snapshot.data().count;
       queue.push({...part,hi:middle,end:middle,count:left,depth:part.depth+1,tight:false},{...part,lo:middle,start:middle,count:Math.max(0,part.count-left),depth:part.depth+1,tight:false});
