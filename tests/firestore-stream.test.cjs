@@ -1,0 +1,22 @@
+'use strict';
+const assert=require('node:assert/strict'),{Duplex}=require('node:stream'),relay=require('../firestore-index-stream.cjs');
+const wait=async fn=>{for(let n=0;n<100;n++){if(fn())return;await new Promise(r=>setTimeout(r,5));}throw Error('WAIT_TIMEOUT');};
+(async()=>{
+ const {openIndex,SOURCE_FIELDS}=await import('../read-index-model.mjs');const db=await openIndex(':memory:');
+ let stream,request,lost=false;const clientFactory=()=>({listen(){stream=new Duplex({objectMode:true,read(){},write(value,encoding,cb){request=value;cb();}});return stream;},async close(){}});
+ const indexRequest=async m=>{const result=db.mutate(m.kind,m);if(m.action==='apply'&&m.changes.length&&!lost){lost=true;throw Error('ISOLATED_RESPONSE_LOST');}return result;};
+ const status=await relay.run('naverOrders',{bootstrap:true,maxReads:20,indexRequest,clientFactory,fields:SOURCE_FIELDS.naverOrders});
+ assert.equal(request.addTarget.resumeToken,undefined);
+ stream.push({documentChange:{document:{name:'projects/demo/databases/(default)/documents/naverOrders/fixture',fields:{buyerName:{stringValue:'김가나다'},productName:{stringValue:'테스트상품'},amount:{integerValue:'200'},paymentDate:{stringValue:'2026-11-05T00:00:00Z'},pdfBase64:{stringValue:'DO_NOT_COPY'}}}}});
+ stream.push({targetChange:{targetChangeType:'CURRENT',resumeToken:Buffer.from('test-token'),readTime:{seconds:1793836800,nanos:0}}});
+ await wait(()=>status.state==='current');assert.equal(db.query('naverOrders',{keyword:'가나'}).total,1);assert.equal(db.query('naverOrders',{}).totalAmount,200);assert.equal(db.state('naverOrders').documents_read,1);assert.ok(!JSON.stringify(db.query('naverOrders',{})).includes('DO_NOT_COPY'));
+ stream.push({documentChange:{document:{name:'projects/demo/databases/(default)/documents/naverOrders/fixture',fields:{buyerName:{stringValue:'수정이름'},amount:{integerValue:'300'},paymentDate:{stringValue:'2026-11-05T00:00:00Z'}}}}});
+ stream.push({targetChange:{targetChangeType:'NO_CHANGE',resumeToken:Buffer.from('token-2'),readTime:{seconds:1793836801,nanos:0}}});
+ await wait(()=>db.query('naverOrders',{keyword:'수정'}).total===1);assert.equal(db.query('naverOrders',{}).totalAmount,300);assert.equal(db.query('naverOrders',{keyword:'가나'}).total,0);
+ stream.push({documentDelete:{document:'projects/demo/databases/(default)/documents/naverOrders/fixture'}});stream.push({targetChange:{targetChangeType:'NO_CHANGE',resumeToken:Buffer.from('token-3'),readTime:{seconds:1793836802,nanos:0}}});
+ await wait(()=>db.query('naverOrders',{}).total===0);await relay.shutdown('naverOrders');
+ const resumed=await relay.run('naverOrders',{indexRequest,clientFactory,fields:SOURCE_FIELDS.naverOrders});assert.equal(request.addTarget.resumeToken.toString(),'token-3');
+ stream.emit('error',Object.assign(Error('isolated quota'),{code:8}));await wait(()=>resumed.state==='stopped');assert.equal(resumed.error,'FIRESTORE_QUOTA');assert.equal(db.query('naverOrders',{}).stale,true);assert.equal(relay.status().length,0);
+ await assert.rejects(relay.run('naverOrders',{indexRequest,clientFactory,fields:SOURCE_FIELDS.naverOrders}),e=>e.code===8);
+ db.close();console.log('PASS source stream: once-only upsert despite lost response, updates/delete summaries, durable checkpoint restart, quota abort and no auto retry, safe field projection');
+})().catch(e=>{console.error(e);process.exitCode=1});

@@ -5,6 +5,9 @@ const crypto = require("crypto");
 const admin = require("firebase-admin");
 
 const app = express();
+const readMetrics = require('./firestore-read-metrics.cjs');
+readMetrics.install(require('@google-cloud/firestore'));
+app.use(readMetrics.middleware);
 
 app.use(cors({
   origin: "*"
@@ -1916,57 +1919,10 @@ app.get("/naver/unshipped-orders", requireFirebaseAdmin, async (req, res) => {
 
 
 
-app.get("/stored/estimates", requireFirebaseAdmin, async (req, res) => {
-  try {
-    initFirebaseAdmin();
-
-    const startDate = req.query.startDate ? String(req.query.startDate) : "";
-    const endDate = req.query.endDate ? String(req.query.endDate) : "";
-    const keyword = req.query.keyword ? String(req.query.keyword) : "";
-    const status = req.query.status ? String(req.query.status) : "";
-    const limit = Math.max(1, Math.min(2000, Number(req.query.limit) || 1000));
-
-    const snapshot = await admin.firestore()
-      .collection("estimates")
-      .orderBy("createdAt", "desc")
-      .limit(limit)
-      .get();
-
-    const rows = snapshot.docs.map((doc) => {
-      const data = serializeFirestoreValue(doc.data());
-      const orderStatus = normalizeEstimateStatus(data.orderStatus || data.status);
-      return {
-        id: doc.id,
-        ...data,
-        orderStatus,
-        orderStatusLabel: getEstimateStatusLabel(orderStatus)
-      };
-    });
-
-    const filtered = filterEstimates(rows, { startDate, endDate, keyword, status });
-
-    res.json({
-      ok: true,
-      message: "견적 목록 조회 성공",
-      admin: req.adminUser.email,
-      query: {
-        startDate,
-        endDate,
-        keyword,
-        status,
-        limit
-      },
-      count: filtered.length,
-      estimates: filtered
-    });
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      message: error.message,
-      status: error.status || 500,
-      detail: error.data || null
-    });
-  }
+app.get('/stored/estimates', requireFirebaseAdmin, async (req,res)=>{
+ res.set('Cache-Control','private, no-store');
+ try {const result=await require('./read-index-client.cjs')({action:'query',kind:'estimates',query:req.query,actor:req.adminUser.email});return res.json({...result,count:result.total});}
+ catch(e){return res.status(e.status||503).json({ok:false,code:e.message,retryable:false,operation:'read',message:'갱신에 실패했습니다. 이전 정상 데이터를 유지합니다.'});}
 });
 
 app.patch("/stored/estimates/:estimateId/status", requireFirebaseAdmin, async (req, res) => {
@@ -2095,53 +2051,10 @@ app.delete("/stored/estimates/:estimateId", requireFirebaseAdmin, async (req, re
 });
 
 
-app.get("/stored/naver-orders", requireFirebaseAdmin, async (req, res) => {
-  try {
-    initFirebaseAdmin();
-
-    const startDate = req.query.startDate ? String(req.query.startDate) : "";
-    const endDate = req.query.endDate ? String(req.query.endDate) : "";
-    const keyword = req.query.keyword ? String(req.query.keyword) : "";
-    const limit = Math.max(1, Math.min(2000, Number(req.query.limit) || 1000));
-
-    const snapshot = await admin.firestore()
-      .collection("naverOrders")
-      .orderBy("lastSyncedAt", "desc")
-      .limit(limit)
-      .get();
-
-    const orders = snapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data()
-    }));
-
-    const filteredOrders = filterStoredOrders(orders, {
-      startDate,
-      endDate,
-      keyword
-    });
-
-    res.json({
-      ok: true,
-      message: "저장된 네이버 주문 조회 성공",
-      admin: req.adminUser.email,
-      query: {
-        startDate,
-        endDate,
-        keyword,
-        limit
-      },
-      count: filteredOrders.length,
-      orders: filteredOrders
-    });
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      message: error.message,
-      status: error.status || 500,
-      detail: error.data || null
-    });
-  }
+app.get('/stored/naver-orders', requireFirebaseAdmin, async (req,res)=>{
+ res.set('Cache-Control','private, no-store');
+ try {const result=await require('./read-index-client.cjs')({action:'query',kind:'naverOrders',query:req.query,actor:req.adminUser.email});return res.json({...result,count:result.total});}
+ catch(e){return res.status(e.status||503).json({ok:false,code:e.message,retryable:false,operation:'read',message:'갱신에 실패했습니다. 이전 정상 데이터를 유지합니다.'});}
 });
 
 
@@ -3721,7 +3634,15 @@ app.listen(PORT, () => {
   console.log(`cnffurdl-order-api running on port ${PORT}`);
 });
 
+require('./firestore-index-stream.cjs').startFromCheckpoint().catch(() => console.error('[firestore-index] initialization unavailable; no automatic bootstrap'));
 const storedNaverService = require('./pm-stored-orders.cjs')(app, { requireFirebaseAdmin, admin, initFirebaseAdmin });
 app.locals.invalidateStoredNaver = storedNaverService.invalidate;
 const pmEstimateService = require('./pm-estimates.cjs')(app, { requireFirebaseAdmin, admin, initFirebaseAdmin, readNaver: async ids => (await getProductOrderDetailsByIds(ids, {})).map(extractSimpleOrder) });
 
+
+// Explicit one-time index bootstrap only. Never called by a list, search, refresh or retry.
+app.post('/stored/admin/read-index/bootstrap', requireFirebaseAdmin, async (req,res) => {
+  res.set('Cache-Control','private, no-store');
+  try { const result=await require('./firestore-index-stream.cjs').bootstrap(String(req.body.kind||''),Number(req.body.maxReads));return res.status(202).json({ok:true,...result}); }
+  catch(e){return res.status(e.status||503).json({ok:false,code:e.message,retryable:false,operation:'index-bootstrap'});}
+});

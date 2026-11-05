@@ -4,7 +4,8 @@
   "description": "출력이 견적-네이버 주문 자동매칭 API 서버 - file received flag",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node tests/read-index.test.mjs && node tests/firestore-stream.test.cjs && node tests/pm-stored-orders.test.cjs && node tests/pm-estimate-match.test.cjs && node test-pm-estimates.cjs && node test-startup.cjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
