@@ -7,7 +7,7 @@ const KINDS=['naverOrders','estimates'];
 const bootstrapFlights=new Map(),running=new Map();
 function value(v){if(v.nullValue!==undefined)return null;if(v.stringValue!==undefined)return v.stringValue;if(v.integerValue!==undefined)return Number(v.integerValue);if(v.doubleValue!==undefined)return v.doubleValue;if(v.booleanValue!==undefined)return v.booleanValue;if(v.timestampValue){const t=v.timestampValue;return new Date(Number(t.seconds)*1000+Math.floor((t.nanos||0)/1e6)).toISOString();}if(v.arrayValue)return(v.arrayValue.values||[]).map(value);if(v.mapValue)return Object.fromEntries(Object.entries(v.mapValue.fields||{}).map(([k,v])=>[k,value(v)]));return undefined;}
 const timestamp=t=>t?new Date(Number(t.seconds)*1000+Math.floor((t.nanos||0)/1e6)).toISOString():undefined;
-function credentials(){if(process.env.FIRESTORE_EMULATOR_HOST){if(!String(process.env.FIREBASE_PROJECT_ID).startsWith('demo-'))throw Error('EMULATOR_DEMO_PROJECT_REQUIRED');return {projectId:process.env.FIREBASE_PROJECT_ID};}return {projectId:process.env.FIREBASE_PROJECT_ID,credentials:{client_email:process.env.FIREBASE_CLIENT_EMAIL,private_key:String(process.env.FIREBASE_PRIVATE_KEY||'').replace(/\\n/g,'\n')},fallback:false};}
+function credentials(){if(process.env.FIRESTORE_EMULATOR_HOST){if(!String(process.env.FIREBASE_PROJECT_ID).startsWith('demo-'))throw Error('EMULATOR_DEMO_PROJECT_REQUIRED');return {projectId:process.env.FIREBASE_PROJECT_ID};}return {projectId:process.env.FIREBASE_PROJECT_ID,credentials:{client_email:process.env.FIREBASE_CLIENT_EMAIL,private_key:String(process.env.FIREBASE_PRIVATE_KEY||'').replace(/\\n/g, "\n")},fallback:false};}
 async function run(kind,{bootstrap=false,maxReads=0,indexRequest=request,clientFactory,fields,restartAttempt=0}={}){
  readMetrics.check();
  if(running.has(kind))return running.get(kind).status;
@@ -26,7 +26,7 @@ async function run(kind,{bootstrap=false,maxReads=0,indexRequest=request,clientF
  let sequence=checkpoint.sequence||0,changes=[],readCount=0,current=!!checkpoint.ready,closed=false,processing=Promise.resolve(),heartbeat;
  const meta={owner,kind};
  const stop=async error=>{
-  if(closed)return;closed=true;clearInterval(heartbeat);status.state='stopped';status.error=readMetrics.quota(error)?'FIRESTORE_QUOTA':error.message||'INDEX_STREAM_FAILED';readMetrics.block(error);
+  if(closed)return;closed=true;clearInterval(heartbeat);status.state='stopped';status.error=readMetrics.quota(error)?'FIRESTORE_QUOTA':/^[A-Z_]{3,80}$/.test(error.message||'')?error.message:'INDEX_STREAM_FAILED';readMetrics.block(error);
   stream?.cancel?.();stream?.destroy?.();running.delete(kind);
   await indexRequest({...meta,action:'error',error:status.error}).catch(()=>{});await client.close?.().catch(()=>{});
   console.warn('[firestore-index-stream]',JSON.stringify(status));
