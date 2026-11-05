@@ -12,6 +12,7 @@ async function run(kind,{bootstrap=false,maxReads=0,indexRequest=request,clientF
  readMetrics.check();
  if(running.has(kind))return running.get(kind).status;
  if(!KINDS.includes(kind))throw Error('INVALID_SOURCE');
+ const {project:projectRecord}=await import('./read-index-model.mjs');
  const owner=randomUUID(),generation=randomUUID();
  const lease=await indexRequest({action:'lease',kind,owner,generation,bootstrap});
  if(lease.bootstrapRequired)return {kind,bootstrapRequired:true};
@@ -48,7 +49,7 @@ async function run(kind,{bootstrap=false,maxReads=0,indexRequest=request,clientF
    if(bootstrap&&!current&&status.documentsRead>=maxReads)throw Error('BOOTSTRAP_READ_BUDGET_EXCEEDED');
    const document=r.documentChange.document,id=document.name.split('/').at(-1);
    const data={};for(const [key,entry] of Object.entries(document.fields||{}))if(fields.includes(key))data[key]=value(entry);
-   status.documentsRead++;readCount++;changes.push({id,data});
+   status.documentsRead++;readCount++;changes.push({id,data:projectRecord(kind,id,data)});
   }
   if(r.documentDelete||r.documentRemove){const change=r.documentDelete||r.documentRemove;changes.push({id:change.document.split('/').at(-1),deleted:true});}
   if(changes.length>=50||Buffer.byteLength(JSON.stringify(changes))>=128*1024)await flush();
