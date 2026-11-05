@@ -1922,7 +1922,7 @@ app.get("/naver/unshipped-orders", requireFirebaseAdmin, async (req, res) => {
 app.get('/stored/estimates', requireFirebaseAdmin, async (req,res)=>{
  res.set('Cache-Control','private, no-store');
  try {const result=await require('./read-index-client.cjs')({action:'query',kind:'estimates',query:req.query,actor:req.adminUser.email});return res.json({...result,count:result.total});}
- catch(e){return res.status(e.status||503).json({ok:false,code:e.message,retryable:false,operation:'read',message:'갱신에 실패했습니다. 이전 정상 데이터를 유지합니다.'});}
+ catch(e){return res.status(e.status>=500?424:e.status||424).json({ok:false,sourceStatus:e.status||503,code:e.message,retryable:false,operation:'read',message:'갱신에 실패했습니다. 이전 정상 데이터를 유지합니다.'});}
 });
 
 app.patch("/stored/estimates/:estimateId/status", requireFirebaseAdmin, async (req, res) => {
@@ -2054,7 +2054,7 @@ app.delete("/stored/estimates/:estimateId", requireFirebaseAdmin, async (req, re
 app.get('/stored/naver-orders', requireFirebaseAdmin, async (req,res)=>{
  res.set('Cache-Control','private, no-store');
  try {const result=await require('./read-index-client.cjs')({action:'query',kind:'naverOrders',query:req.query,actor:req.adminUser.email});return res.json({...result,count:result.total});}
- catch(e){return res.status(e.status||503).json({ok:false,code:e.message,retryable:false,operation:'read',message:'갱신에 실패했습니다. 이전 정상 데이터를 유지합니다.'});}
+ catch(e){return res.status(e.status>=500?424:e.status||424).json({ok:false,sourceStatus:e.status||503,code:e.message,retryable:false,operation:'read',message:'갱신에 실패했습니다. 이전 정상 데이터를 유지합니다.'});}
 });
 
 

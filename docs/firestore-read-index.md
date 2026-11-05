@@ -15,3 +15,5 @@ Production validation after quota recovery: preflight each source count once, ch
 The emulator1.22.0 returns RESET on saved-token resumption; the test verifies0 rereads and stale preservation in that case. Normal incremental update/delete/checkpoint behavior is also tested with isolated protocol events. A successful production token resume and uninterrupted live updates must be confirmed after quota recovery; emulator RESET suppression is not evidence of successful live resumption.
 
 Rollback replaces only the changed API/frontend files and71 code/build. Keep the SQLite projection and source checkpoint for diagnosis. Never restore old order, match, payment, production or shipment state from a code backup. Do not modify a billing plan.
+
+Cloudtype replaces application503 bodies with an HTML proxy error. Read-route upstream5xx errors are therefore transported as424 Failed Dependency with the original `sourceStatus` and structured non-retryable code. This preserves CORS and failure explanations; ok=false remains mandatory. PM forwards the original source status and sanitizes a non-JSON upstream response.
