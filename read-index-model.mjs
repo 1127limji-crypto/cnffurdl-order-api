@@ -158,6 +158,7 @@ CREATE INDEX IF NOT EXISTS idx_records_matched ON records(kind,visible,matched,s
 CREATE TABLE IF NOT EXISTS search_grams(kind TEXT NOT NULL,gram TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(kind,gram,id),FOREIGN KEY(kind,id) REFERENCES records(kind,id) ON DELETE CASCADE) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS exact_ids(kind TEXT NOT NULL,identifier TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(kind,identifier,id),FOREIGN KEY(kind,id) REFERENCES records(kind,id) ON DELETE CASCADE) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS daily_summary(kind TEXT NOT NULL,day TEXT NOT NULL,visible INTEGER NOT NULL,total INTEGER NOT NULL,paid INTEGER NOT NULL,amount REAL NOT NULL,PRIMARY KEY(kind,day,visible));
+CREATE TABLE IF NOT EXISTS recovery_reviews(id INTEGER PRIMARY KEY,at INTEGER NOT NULL,kind TEXT NOT NULL,previous_disconnected_at INTEGER NOT NULL,read_limit INTEGER NOT NULL,owner TEXT NOT NULL,source_error TEXT,source_error_code INTEGER);
 CREATE TABLE IF NOT EXISTS read_ledger(id INTEGER PRIMARY KEY,at INTEGER NOT NULL,kind TEXT NOT NULL,path TEXT NOT NULL,documents INTEGER NOT NULL,empty_queries INTEGER NOT NULL DEFAULT 0);
 CREATE TRIGGER IF NOT EXISTS summary_insert AFTER INSERT ON records BEGIN INSERT INTO daily_summary VALUES(NEW.kind,NEW.day,NEW.visible,1,NEW.paid,NEW.amount) ON CONFLICT(kind,day,visible) DO UPDATE SET total=total+1,paid=paid+NEW.paid,amount=amount+NEW.amount; END;
 CREATE TRIGGER IF NOT EXISTS summary_delete AFTER DELETE ON records BEGIN UPDATE daily_summary SET total=total-1,paid=paid-OLD.paid,amount=amount-OLD.amount WHERE kind=OLD.kind AND day=OLD.day AND visible=OLD.visible; END;
@@ -167,7 +168,7 @@ export async function openIndex(path,secret='isolated-test-key'){
  if(path!==':memory:'){mkdirSync(dirname(path),{recursive:true,mode:0o700});chmodSync(dirname(path),0o700);}
  const db=new DatabaseSync(path);db.exec(schema);if(path!==':memory:')chmodSync(path,0o600);
  const columns=new Set(db.prepare('PRAGMA table_info(source_state)').all().map(c=>c.name));
- for(const [name,type] of [['disconnected_at','INTEGER DEFAULT 0'],['retry_attempt','INTEGER DEFAULT 0']])if(!columns.has(name))db.exec(`ALTER TABLE source_state ADD COLUMN ${name} ${type}`);
+ for(const [name,type] of [['disconnected_at','INTEGER DEFAULT 0'],['retry_attempt','INTEGER DEFAULT 0'],['error_code','INTEGER']])if(!columns.has(name))db.exec(`ALTER TABLE source_state ADD COLUMN ${name} ${type}`);
  const txn=fn=>{db.exec('BEGIN IMMEDIATE');try{const v=fn();db.exec('COMMIT');return v;}catch(e){db.exec('ROLLBACK');throw e;}};
  const state=kind=>db.prepare('SELECT * FROM source_state WHERE kind=?').get(kind);
  const upsert=(kind,id,data)=>{
@@ -220,31 +221,39 @@ export async function openIndex(path,secret='isolated-test-key'){
   if(!SOURCE_FIELDS[kind])throw Error('INVALID_SOURCE');return txn(()=>{
    let s=state(kind);const now=Date.now();
    if(message.action==='lease'){
+    const review=message.manualResume;
+    if(review){
+     if(!s?.ready||!s.token||!s.disconnected_at||Number(review.expectedDisconnectedAt)!==s.disconnected_at||!Number.isInteger(review.maxReads)||review.maxReads<1||review.maxReads>199)throw Object.assign(Error('INDEX_RESUME_STATE_CHANGED'),{status:409});
+     if(!s.error||/QUOTA|RESET|BUDGET|MISMATCH|PARTIAL|REBUILD/.test(s.error))throw Object.assign(Error('INDEX_RESUME_REVIEW_REQUIRED'),{status:409});
+     if(db.prepare("SELECT 1 FROM recovery_reviews WHERE kind=? AND previous_disconnected_at=?").get(kind,s.disconnected_at))throw Object.assign(Error('INDEX_RESUME_REVIEW_ALREADY_USED'),{status:409});
+    }
+
     if(!message.bootstrap&&db.prepare("SELECT 1 FROM source_state WHERE error='FIRESTORE_QUOTA' LIMIT 1").get())throw Object.assign(Error('FIRESTORE_QUOTA'),{status:503});
-    if(!message.bootstrap&&s?.error&&/RESET|BUDGET|MISMATCH|PARTIAL|WINDOW_EXPIRED/.test(s.error))throw Object.assign(Error(s.error),{status:409});
+    if(!message.bootstrap&&!review&&s?.error&&/RESET|BUDGET|MISMATCH|PARTIAL|WINDOW_EXPIRED/.test(s.error))throw Object.assign(Error(s.error),{status:409});
     if(s&&!s.ready&&!message.bootstrap)return {ok:true,bootstrapRequired:true};
     if(!s){if(!message.bootstrap) return {ok:true,bootstrapRequired:true};db.prepare('INSERT INTO source_state(kind,generation) VALUES(?,?)').run(kind,message.generation);s=state(kind);}
     if(s.lease_until>now&&s.owner!==message.owner)throw Object.assign(Error('INDEX_LEASE_BUSY'),{status:409});
     if(s.error==='FIRESTORE_QUOTA'&&!message.bootstrap)throw Object.assign(Error('FIRESTORE_QUOTA'),{status:503});
     const disconnectedAt=s.disconnected_at||(s.ready?s.heartbeat:0);
-    if(!message.bootstrap&&disconnectedAt&&now-disconnectedAt>=1800000){db.prepare("UPDATE source_state SET error='INDEX_RECONNECT_WINDOW_EXPIRED',disconnected_at=? WHERE kind=?").run(disconnectedAt,kind);return {ok:true,state:state(kind),recordCount:db.prepare('SELECT count(*) AS n FROM records WHERE kind=?').get(kind).n};}
+    if(!message.bootstrap&&!review&&disconnectedAt&&now-disconnectedAt>=1800000){db.prepare("UPDATE source_state SET error='INDEX_RECONNECT_WINDOW_EXPIRED',disconnected_at=? WHERE kind=?").run(disconnectedAt,kind);return {ok:true,state:state(kind),recordCount:db.prepare('SELECT count(*) AS n FROM records WHERE kind=?').get(kind).n};}
+    if(review)db.prepare('INSERT INTO recovery_reviews(at,kind,previous_disconnected_at,read_limit,owner,source_error,source_error_code) VALUES(?,?,?,?,?,?,?)').run(now,kind,s.disconnected_at,review.maxReads,message.owner,s.error,s.error_code);
     db.prepare('UPDATE source_state SET owner=?,lease_until=? WHERE kind=?').run(message.owner,now+60000,kind);
-    return {ok:true,state:state(kind),recordCount:db.prepare('SELECT count(*) AS n FROM records WHERE kind=?').get(kind).n};
+    return {ok:true,state:state(kind),reviewAccepted:!!review,recordCount:db.prepare('SELECT count(*) AS n FROM records WHERE kind=?').get(kind).n};
    }
    if(!s||s.owner!==message.owner||(s.lease_until<now&&message.action!=='error'))throw Object.assign(Error('INDEX_LEASE_LOST'),{status:409});
    if(message.action==='verify'){const actual=db.prepare('SELECT count(*) AS n FROM records WHERE kind=?').get(kind).n;if(actual!==message.expectedCount)throw Object.assign(Error('INDEX_EXISTENCE_FILTER_MISMATCH'),{status:409});return {ok:true};}
-   if(message.action==='error'){const code=String(message.error||'INDEX_SYNC_FAILED').slice(0,60);db.prepare('UPDATE source_state SET error=?,lease_until=?,disconnected_at=CASE WHEN disconnected_at>0 THEN disconnected_at ELSE ? END,retry_attempt=? WHERE kind=?').run(code,now,Math.min(now,Number(message.disconnectedAt)||now),Math.max(0,Number(message.retryAttempt)||0),kind);return {ok:true};}
+   if(message.action==='error'){const code=String(message.error||'INDEX_SYNC_FAILED').slice(0,60);db.prepare('UPDATE source_state SET error=?,error_code=?,lease_until=?,disconnected_at=CASE WHEN disconnected_at>0 THEN disconnected_at ELSE ? END,retry_attempt=? WHERE kind=?').run(code,Number.isInteger(message.errorCode)&&message.errorCode>=0&&message.errorCode<=16?message.errorCode:null,now,Math.min(now,Number(message.disconnectedAt)||now),Math.max(0,Number(message.retryAttempt)||0),kind);return {ok:true};}
    if(message.action!=='apply')throw Error('INVALID_INDEX_ACTION');
    if(message.sequence<=s.sequence)return {ok:true,duplicate:true};if(message.sequence!==s.sequence+1)throw Object.assign(Error('INDEX_SEQUENCE_GAP'),{status:409});
    if(!Array.isArray(message.changes)||message.changes.length>100)throw Error('INVALID_INDEX_BATCH');
    const since=now-86400000;const recentReads=db.prepare('SELECT coalesce(sum(documents),0) AS n FROM read_ledger WHERE at>=?').get(since).n;if(recentReads+Number(message.documentsRead||0)>20000)throw Object.assign(Error('INDEX_DAILY_READ_BUDGET'),{status:429});
    for(const change of message.changes){if(change.deleted)db.prepare('DELETE FROM records WHERE kind=? AND id=?').run(kind,change.id);else upsert(kind,change.id,change.data);}
    db.prepare('UPDATE source_state SET sequence=?,token=coalesce(?,token),read_time=coalesce(?,read_time),ready=CASE WHEN ? THEN 1 ELSE ready END,error=CASE WHEN ? THEN NULL ELSE error END,heartbeat=CASE WHEN ? THEN ? ELSE heartbeat END,lease_until=?,data_revision=data_revision+?,documents_read=documents_read+?,bootstrap_after=coalesce(?,bootstrap_after),bootstrap_snapshot=coalesce(?,bootstrap_snapshot) WHERE kind=?').run(message.sequence,message.token||null,message.readTime||null,+!!message.current,+!!(message.current||message.readTime),+!!(message.current||message.readTime),now,now+60000,+!!message.changes.length,message.documentsRead||0,message.bootstrapAfter||null,message.bootstrapSnapshot?JSON.stringify(message.bootstrapSnapshot):null,kind);
-   if(message.current||message.readTime)db.prepare('UPDATE source_state SET disconnected_at=0,retry_attempt=0 WHERE kind=?').run(kind);
+   if(message.current||message.readTime)db.prepare('UPDATE source_state SET disconnected_at=0,retry_attempt=0,error_code=NULL WHERE kind=?').run(kind);
    if(message.documentsRead)db.prepare('INSERT INTO read_ledger(at,kind,path,documents) VALUES(?,?,?,?)').run(now,kind,message.bootstrap?'bootstrap':'change-stream',message.documentsRead);
    return {ok:true,sequence:message.sequence};
   });
  }
  const snapshotQuery=(...args)=>{db.exec('BEGIN');try{const result=query(...args);db.exec('COMMIT');return result;}catch(e){db.exec('ROLLBACK');throw e;}};
- return {db,state,query:snapshotQuery,mutate,close:()=>db.close(),diagnostic:()=>({ok:true,version:VERSION,sources:db.prepare('SELECT kind,ready,read_time,error,heartbeat,documents_read,disconnected_at,retry_attempt FROM source_state').all(),reads:db.prepare('SELECT kind,path,sum(documents) AS documents FROM read_ledger GROUP BY kind,path').all()})};
+ return {db,state,query:snapshotQuery,mutate,close:()=>db.close(),diagnostic:()=>({ok:true,version:VERSION,sources:db.prepare('SELECT kind,ready,read_time,error,error_code,heartbeat,documents_read,disconnected_at,retry_attempt FROM source_state').all(),reads:db.prepare('SELECT kind,path,sum(documents) AS documents FROM read_ledger GROUP BY kind,path').all(),recoveryReviews:db.prepare('SELECT at,kind,previous_disconnected_at,read_limit,source_error,source_error_code FROM recovery_reviews ORDER BY id DESC LIMIT 10').all()})};
 }

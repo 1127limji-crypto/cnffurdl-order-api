@@ -3617,6 +3617,14 @@ app.locals.invalidateStoredNaver = storedNaverService.invalidate;
 const pmEstimateService = require('./pm-estimates.cjs')(app, { requireFirebaseAdmin, admin, initFirebaseAdmin, readNaver: async ids => (await getProductOrderDetailsByIds(ids, {})).map(extractSimpleOrder) });
 
 
+// Deliberate operator review after a protected stop. Never invoked by timers or list routes.
+app.post('/stored/admin/read-index/resume', requireFirebaseAdmin, async(req,res)=>{
+ res.set('Cache-Control','private, no-store');
+ if(req.body.confirm!=='resume-saved-checkpoint')return res.status(400).json({ok:false,code:'EXPLICIT_RESUME_REVIEW_REQUIRED'});
+ try{const result=await require('./firestore-index-stream.cjs').resume(String(req.body.kind||''),Number(req.body.maxReads),Number(req.body.expectedDisconnectedAt));return res.status(202).json({ok:true,...result});}
+ catch(e){return res.status(e.status>=500?424:e.status||424).json({ok:false,sourceStatus:e.status||503,code:readMetrics.quota(e)?'FIRESTORE_QUOTA':e.message,retryable:false,operation:'index-reviewed-resume'});}
+});
+
 // Explicit one-time index bootstrap only. Never called by a list, search, refresh or retry.
 app.post('/stored/admin/read-index/bootstrap', requireFirebaseAdmin, async (req,res) => {
   res.set('Cache-Control','private, no-store');
