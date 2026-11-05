@@ -2648,36 +2648,7 @@ app.get("/cafe24/oauth/callback", async (req, res) => {
     initFirebaseAdmin();
     const db = admin.firestore();
 
-    const encrypted = cafe24EncryptJson(
-      {
-        access_token: token.access_token,
-        refresh_token: token.refresh_token,
-        token_type: token.token_type || "Bearer",
-        issued_at: token.issued_at || null,
-        expires_at: token.expires_at || null,
-        refresh_token_expires_at: token.refresh_token_expires_at || null,
-        scopes
-      },
-      c.tokenKey
-    );
-
-    await db
-      .collection(CAFE24_TOKEN_DOC_COLLECTION)
-      .doc(CAFE24_TOKEN_DOC_ID)
-      .set(
-        {
-          integration: "cafe24",
-          mallId: token.mall_id || c.mallId,
-          userId: token.user_id || null,
-          shopNo: token.shop_no || null,
-          scopes,
-          expiresAt: token.expires_at || null,
-          refreshTokenExpiresAt: token.refresh_token_expires_at || null,
-          tokenCipher: encrypted,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        },
-        { merge: true }
-      );
+    await cafe24PersistToken(db.collection(CAFE24_TOKEN_DOC_COLLECTION).doc(CAFE24_TOKEN_DOC_ID), c, {...token, scopes});
 
     return res
       .status(200)
@@ -2788,6 +2759,8 @@ app.get("/cafe24/oauth/status", async (req, res) => {
 //
 
 let cafe24RefreshInFlight = null;
+const cafe24TokenCache = require("./cafe24-token-cache.cjs")();
+const cafe24TokenCacheKey = c => crypto.createHash("sha256").update(JSON.stringify([c.mallId,c.clientId,c.tokenKey])).digest("hex");
 
 function cafe24DecryptJson(payload, rawKey) {
   if (!payload || payload.algorithm !== "aes-256-gcm") {
@@ -2835,6 +2808,7 @@ async function cafe24LoadTokenState() {
     .collection(CAFE24_TOKEN_DOC_COLLECTION)
     .doc(CAFE24_TOKEN_DOC_ID);
 
+  return cafe24TokenCache.get(cafe24TokenCacheKey(c), async () => {
   const snap = await ref.get();
 
   if (!snap.exists) {
@@ -2855,6 +2829,7 @@ async function cafe24LoadTokenState() {
   }
 
   return { c, db, ref, meta, token };
+  });
 }
 
 async function cafe24PersistToken(ref, c, token) {
@@ -2877,8 +2852,7 @@ async function cafe24PersistToken(ref, c, token) {
     c.tokenKey
   );
 
-  await ref.set(
-    {
+  const meta = {
       integration: "cafe24",
       mallId: token.mall_id || c.mallId,
       userId: token.user_id || null,
@@ -2888,9 +2862,9 @@ async function cafe24PersistToken(ref, c, token) {
       refreshTokenExpiresAt: token.refresh_token_expires_at || null,
       tokenCipher: encrypted,
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    },
-    { merge: true }
-  );
+  };
+  await ref.set(meta, {merge: true});
+  cafe24TokenCache.put(cafe24TokenCacheKey(c), {c, db:admin.firestore(), ref, meta, token:{...token, scopes}});
 
   return scopes;
 }
@@ -3703,6 +3677,7 @@ app.get(
       console.error("[cafe24 orders normalized]", error?.code || error?.message);
       return res.status(Number(error?.httpStatus) || 500).json({
         ok: false,
+        code: error?.code || "CAFE24_ORDERS_FAILED",
         error: error?.message || "Cafe24 정규화 주문 조회 실패"
       });
     }
