@@ -74,7 +74,14 @@ async function run(kind,{bootstrap=false,maxReads=0,indexRequest=request,clientF
 }
 async function startFromCheckpoint(options={}){
  const {SOURCE_FIELDS}=await import('./read-index-model.mjs');
- for(const kind of KINDS){try{await run(kind,{...options,fields:SOURCE_FIELDS[kind]});}catch(e){console.warn('[firestore-index-start]',JSON.stringify({kind,code:e.status||'UNAVAILABLE'}));}}
+ async function startKind(kind,attempt=0){
+  try{await run(kind,{...options,fields:SOURCE_FIELDS[kind]});}
+  catch(e){console.warn('[firestore-index-start]',JSON.stringify({kind,code:e.status||'UNAVAILABLE'}));
+   // A rolling deploy may overlap the old worker's60s lease. Retrying this lease makes no Firestore request.
+   if(e.message==='INDEX_LEASE_BUSY'&&attempt<3){const timer=setTimeout(()=>startKind(kind,attempt+1),options.leaseRetryDelayMs||30000);timer.unref?.();}
+  }
+ }
+ for(const kind of KINDS)await startKind(kind);
 }
 async function bootstrap(kind,maxReads,options={}){
  if(!KINDS.includes(kind))throw Object.assign(Error('INVALID_SOURCE'),{status:400});
