@@ -13,7 +13,7 @@ module.exports=(app,{requireFirebaseAdmin,cafe24ApiGet,sleep=ms=>new Promise(res
    const read=async(path,query)=>{
     for(let attempt=0;attempt<3;attempt++){
      await sleep(attempt?1000*attempt:500);
-     try{return await cafe24ApiGet(path,query);}catch(error){if(attempt===2||![429,500,502,503,504].includes(Number(error.httpStatus)))throw error;}
+     try{return await cafe24ApiGet(path,query);}catch(error){if(error.retryable===false||attempt===2||![429,500,502,503,504].includes(Number(error.httpStatus)))throw error;}
     }
    };
    const orders=[];
@@ -34,6 +34,6 @@ module.exports=(app,{requireFirebaseAdmin,cafe24ApiGet,sleep=ms=>new Promise(res
    }
    for(const o of orders){o.finance_refunds=refunds.filter(r=>r.order_id===o.order_id).map(r=>pick(r,['order_item_code','quantity','actual_refund_amount','used_points','used_credits','status','refund_date','accepted_refund_date']));o.finance_checked_at=new Date().toISOString();}
    return res.set('Cache-Control','no-store').json({ok:true,version:1,shopNo:shop,orders});
-  }catch(error){return res.status(Number(error.httpStatus)||409).json({ok:false,error:'CAFE24_FINANCE_READ_FAILED'});}
+  }catch(error){return require('./cafe24-failure.cjs')(res,error,'finance-orders');}
  });
 };

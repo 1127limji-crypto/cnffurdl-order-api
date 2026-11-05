@@ -17,3 +17,11 @@ The emulator1.22.0 returns RESET on saved-token resumption; the test verifies0 r
 Rollback replaces only the changed API/frontend files and71 code/build. Keep the SQLite projection and source checkpoint for diagnosis. Never restore old order, match, payment, production or shipment state from a code backup. Do not modify a billing plan.
 
 Cloudtype replaces application503 bodies with an HTML proxy error. Read-route upstream5xx errors are therefore transported as424 Failed Dependency with the original `sourceStatus` and structured non-retryable code. This preserves CORS and failure explanations; ok=false remains mandatory. PM forwards the original source status and sanitizes a non-JSON upstream response.
+
+## Cafe24 collection recovery (2026-11-05)
+
+Collection success requires a validated original response and completed PM order/item upserts. List, estimate-count and read-index status requests are separate. Cafe24 failed dependencies use HTTP424 with sourceStatus/code/stage so the Cloudtype proxy cannot replace the original operational code with HTML. No upstream text or credentials are logged.
+
+Only during explicit operator recovery, POST /cafe24/token-store/recover with {singleDocumentProbe:true} under existing authentication. This reads one existing encrypted document once. Only successful verification clears the quota circuit. No OAuth calls, token output, replacement credentials, collection scans or automatic probes. Stop if quota persists. Existing read-index bootstrap is a separate action and uses the documented read budgets only when the index is empty.
+
+Bounded recovery start/end accepts matching dates or second-precision ISO8601 timestamps (+09:00/Z). Start at the last successful source request start, end at a fixed recovery cutoff, compare the same original orders/count interval, and upsert existing product-order identifiers. Timestamp recovery restricts finance reconciliation to those order IDs and preserves matching/production/download state.

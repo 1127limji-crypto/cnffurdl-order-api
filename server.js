@@ -2711,7 +2711,7 @@ function cafe24ParseApiTime(value) {
   return Number.isFinite(ms) ? ms : 0;
 }
 
-async function cafe24LoadTokenState() {
+async function cafe24LoadTokenState({probe=false}={}) {
   const c = cafe24RequireConfig();
 
   initFirebaseAdmin();
@@ -2742,8 +2742,10 @@ async function cafe24LoadTokenState() {
   }
 
   return { c, db, ref, meta, token };
-  });
+  },{probe});
 }
+
+require('./cafe24-token-recovery.cjs')(app,{requireFirebaseAdmin,loadTokenState:cafe24LoadTokenState,readMetrics});
 
 async function cafe24PersistToken(ref, c, token) {
   const scopes = Array.isArray(token.scopes)
@@ -2888,6 +2890,7 @@ async function cafe24ApiGet(pathname, params = {}) {
       }
     }
 
+    const sourceStarted=Date.now();
     const response = await fetch(url, {
       headers: {
         "Authorization": `Bearer ${current.token.access_token}`,
@@ -2896,6 +2899,8 @@ async function cafe24ApiGet(pathname, params = {}) {
     });
 
     const json = await response.json().catch(() => ({}));
+
+    console.info('[cafe24 source]',JSON.stringify({at:new Date().toISOString(),method:'GET',path:pathname.replace(/\/\d{8}-\d{7}/g,'/:order'),status:response.status,elapsedMs:Date.now()-sourceStarted,rateLimit:response.headers.get('x-api-call-limit'),retryAfter:response.headers.get('retry-after')}));
 
     return {
       response,
@@ -2921,6 +2926,7 @@ async function cafe24ApiGet(pathname, params = {}) {
     );
     error.code = "CAFE24_API_FAILED";
     error.httpStatus = result.response.status;
+    error.stage = result.response.status===401||result.response.status===403?'authentication':result.response.status===429?'rate_limit':'source_api';
     throw error;
   }
 
@@ -3588,11 +3594,7 @@ app.get(
       });
     } catch (error) {
       console.error("[cafe24 orders normalized]", error?.code || error?.message);
-      return res.status(Number(error?.httpStatus) || 500).json({
-        ok: false,
-        code: error?.code || "CAFE24_ORDERS_FAILED",
-        error: error?.message || "Cafe24 정규화 주문 조회 실패"
-      });
+      return require('./cafe24-failure.cjs')(res,error,'orders-normalized');
     }
   }
 );
