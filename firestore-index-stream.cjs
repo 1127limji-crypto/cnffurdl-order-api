@@ -83,10 +83,9 @@ async function bootstrap(kind,maxReads,options={}){
  const flight=(async()=>{
   const {SOURCE_FIELDS}=await import('./read-index-model.mjs');
   if(!Number.isInteger(maxReads)||maxReads<1||maxReads>12000)throw Object.assign(Error('INVALID_READ_BUDGET'),{status:400});
-  readMetrics.check();
   // Count preflight does not read source documents. Billing is recorded separately as index reads.
   const {Firestore}=require('@google-cloud/firestore'),db=new Firestore({...credentials(),preferRest:!process.env.FIRESTORE_EMULATOR_HOST});
-  let count;try{count=(await db.collection(kind).count().get()).data().count;}catch(e){readMetrics.block(e);throw e;}finally{await db.terminate();}if(count+100>maxReads)throw Object.assign(Error('BOOTSTRAP_EXCEEDS_READ_BUDGET'),{status:409});
+  let count;try{count=(await readMetrics.manualQuotaProbe(()=>db.collection(kind).count().get())).data().count;}catch(e){readMetrics.block(e);throw e;}finally{await db.terminate();}if(count+100>maxReads)throw Object.assign(Error('BOOTSTRAP_EXCEEDS_READ_BUDGET'),{status:409});
   return run(kind,{...options,bootstrap:true,maxReads,fields:SOURCE_FIELDS[kind]});
  })();bootstrapFlights.set(kind,flight);try{return await flight;}finally{bootstrapFlights.delete(kind);}
 }
