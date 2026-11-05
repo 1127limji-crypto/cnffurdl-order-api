@@ -19,7 +19,7 @@ module.exports=function(app,{requireFirebaseAdmin,admin,initFirebaseAdmin,readNa
  let revision=0;const cache=new Map();
  app.get('/stored/production-manager/estimates',requireFirebaseAdmin,async(req,res)=>{
   res.set('Cache-Control','private, no-store');
-  try{return res.json(await indexRequest({action:'query',kind:'estimates',query:req.query,actor:req.adminUser.email}));}
+  try{if(req.query.syncStatusOnly==='1')return res.json(await require('./read-index-status.cjs')(indexRequest));return res.json(await indexRequest({action:'query',kind:'estimates',query:req.query,actor:req.adminUser.email}));}
   catch(e){return res.status(e.status>=500?424:e.status||424).json({ok:false,sourceStatus:e.status||503,code:e.message,retryable:false,operation:'read',message:'견적 갱신에 실패했습니다. 이전 정상 데이터를 유지합니다.'});}
  });
  app.get('/stored/production-manager/estimates/:id',requireFirebaseAdmin,async(req,res)=>{try{initFirebaseAdmin();const d=await admin.firestore().collection('estimates').doc(req.params.id).get();if(!d.exists)return res.status(404).json({ok:false});res.set('Cache-Control','private, no-store').json({ok:true,estimate:project(d,DETAIL)});}catch{res.status(502).json({ok:false});}});

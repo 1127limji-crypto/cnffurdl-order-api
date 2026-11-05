@@ -17,7 +17,7 @@ const wait=async fn=>{for(let n=0;n<100;n++){if(fn())return;await new Promise(r=
  stream.push({documentDelete:{document:'projects/demo/databases/(default)/documents/naverOrders/fixture'}});stream.push({targetChange:{targetChangeType:'NO_CHANGE',resumeToken:Buffer.from('token-3'),readTime:{seconds:1793836802,nanos:0}}});
  await wait(()=>db.query('naverOrders',{}).total===0);await relay.shutdown('naverOrders');
  const resumed=await relay.run('naverOrders',{indexRequest,clientFactory,fields:SOURCE_FIELDS.naverOrders});assert.equal(request.addTarget.resumeToken.toString(),'token-3');
- stream.emit('error',Object.assign(Error('isolated quota'),{code:8}));await wait(()=>resumed.state==='stopped');assert.equal(resumed.error,'FIRESTORE_QUOTA');assert.equal(db.query('naverOrders',{}).stale,true);assert.equal(relay.status().length,0);
+ stream.emit('error',Object.assign(Error('isolated quota'),{code:8}));await wait(()=>resumed.state==='stopped');assert.equal(resumed.error,'FIRESTORE_QUOTA');assert.equal(db.query('naverOrders',{}).stale,true);assert.equal(relay.status()[0].manualRequired,true);
  await assert.rejects(relay.run('naverOrders',{indexRequest,clientFactory,fields:SOURCE_FIELDS.naverOrders}),e=>e.code===8);
  db.close();console.log('PASS source stream: once-only upsert despite lost response, updates/delete summaries, durable checkpoint restart, quota abort and no auto retry, safe field projection');
 })().catch(e=>{console.error(e);process.exitCode=1});

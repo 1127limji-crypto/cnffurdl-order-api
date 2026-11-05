@@ -166,6 +166,8 @@ export async function openIndex(path,secret='isolated-test-key'){
  const {DatabaseSync}=await import(/* webpackIgnore: true */ 'node:sqlite');
  if(path!==':memory:'){mkdirSync(dirname(path),{recursive:true,mode:0o700});chmodSync(dirname(path),0o700);}
  const db=new DatabaseSync(path);db.exec(schema);if(path!==':memory:')chmodSync(path,0o600);
+ const columns=new Set(db.prepare('PRAGMA table_info(source_state)').all().map(c=>c.name));
+ for(const [name,type] of [['disconnected_at','INTEGER DEFAULT 0'],['retry_attempt','INTEGER DEFAULT 0']])if(!columns.has(name))db.exec(`ALTER TABLE source_state ADD COLUMN ${name} ${type}`);
  const txn=fn=>{db.exec('BEGIN IMMEDIATE');try{const v=fn();db.exec('COMMIT');return v;}catch(e){db.exec('ROLLBACK');throw e;}};
  const state=kind=>db.prepare('SELECT * FROM source_state WHERE kind=?').get(kind);
  const upsert=(kind,id,data)=>{
@@ -177,6 +179,7 @@ export async function openIndex(path,secret='isolated-test-key'){
  const encode=v=>{const body=Buffer.from(JSON.stringify(v)).toString('base64url');return body+'.'+createHmac('sha256',secret).update(body).digest('base64url');};
  const decode=s=>{try{if(s.length>5000)throw Error();const [body,sig]=s.split('.'),expected=createHmac('sha256',secret).update(body).digest(),actual=Buffer.from(sig||'','base64url');if(actual.length!==expected.length||!timingSafeEqual(actual,expected))throw Error();return JSON.parse(Buffer.from(body,'base64url'));}catch{throw Object.assign(Error('INVALID_CURSOR'),{status:409});}};
  function query(kind,input={},actor=''){
+  let sqlQueryCount=1;const prepare=sql=>{sqlQueryCount++;return db.prepare(sql);};
   const started=performance.now(),s=state(kind);if(!s?.ready)throw Object.assign(Error('INDEX_BOOTSTRAP_REQUIRED'),{status:503});
   const startDate=String(input.startDate||''),endDate=String(input.endDate||''),keyword=normalize(input.keyword),sort=String(input.sort||(kind==='naverOrders'?'paymentDesc':'dateDesc')),status=String(input.status||''),pageSize=Math.min(kind==='naverOrders'?50:100,Math.max(1,parseInt(input.pageSize)|| (kind==='naverOrders'?30:50)));
   const validDay=d=>!d||/^\d{4}-\d{2}-\d{2}$/.test(d)&&day(d+'T12:00:00+09:00')===d;
@@ -197,19 +200,19 @@ export async function openIndex(path,secret='isolated-test-key'){
   if(sort==='matchedOnly')where.push('r.matched=1');
   if(status){if(status==='paidConfirmed')where.push('r.paid=1');else {where.push('r.status=?');args.push(status);}}
   const completeWhere=where.join(' AND '),completeArgs=[...args],summaryWhere=['kind=?','visible=1'],summaryArgs=[kind];if(startDate){summaryWhere.push('day>=?');summaryArgs.push(startDate);}if(endDate){summaryWhere.push("day<>'' AND day<=?");summaryArgs.push(endDate);}
-  const counts=db.prepare('SELECT coalesce(sum(total),0) AS allCount,coalesce(sum(paid),0) AS paidConfirmed,coalesce(sum(amount),0) AS amount FROM daily_summary WHERE '+summaryWhere.join(' AND ')).get(...summaryArgs);
-  const totals=!keyword&&!status&&sort!=='matchedOnly'?{total:counts.allCount,totalAmount:counts.amount}:db.prepare('SELECT count(*) AS total,coalesce(sum(r.amount),0) AS totalAmount FROM records r WHERE '+completeWhere).get(...completeArgs);
+  const counts=prepare('SELECT coalesce(sum(total),0) AS allCount,coalesce(sum(paid),0) AS paidConfirmed,coalesce(sum(amount),0) AS amount FROM daily_summary WHERE '+summaryWhere.join(' AND ')).get(...summaryArgs);
+  const totals=!keyword&&!status&&sort!=='matchedOnly'?{total:counts.allCount,totalAmount:counts.amount}:prepare('SELECT count(*) AS total,coalesce(sum(r.amount),0) AS totalAmount FROM records r WHERE '+completeWhere).get(...completeArgs);
   const order=[sorts[sort][0],sorts[sort][1],...(sorts[sort].slice(2)), 'id','asc'];
   const orderParts=[];for(let i=0;i<order.length;i+=2)orderParts.push([order[i],order[i+1]]);
   const orderSQL=orderParts.map(([col,dir])=>'r.'+col+' '+dir).join(',');
   let offset=cursor?.offset||0;
-  if(!cursor&&requestedPage>1){offset=Math.min((requestedPage-1)*pageSize,Math.max(0,Math.ceil(totals.total/pageSize)-1)*pageSize);if(offset){const row=db.prepare('SELECT '+orderParts.map(([col])=>'r.'+col).join(',')+' FROM records r WHERE '+completeWhere+' ORDER BY '+orderSQL+' LIMIT 1 OFFSET ?').get(...completeArgs,offset-1);cursor={values:orderParts.map(([col])=>row[col]),scope,generation:s.generation,revision:s.data_revision,offset};}}
+  if(!cursor&&requestedPage>1){offset=Math.min((requestedPage-1)*pageSize,Math.max(0,Math.ceil(totals.total/pageSize)-1)*pageSize);if(offset){const row=prepare('SELECT '+orderParts.map(([col])=>'r.'+col).join(',')+' FROM records r WHERE '+completeWhere+' ORDER BY '+orderSQL+' LIMIT 1 OFFSET ?').get(...completeArgs,offset-1);cursor={values:orderParts.map(([col])=>row[col]),scope,generation:s.generation,revision:s.data_revision,offset};}}
   if(cursor){const alternatives=[];for(let i=0;i<orderParts.length;i++){const terms=[];for(let j=0;j<i;j++){terms.push('r.'+orderParts[j][0]+'=?');args.push(cursor.values[j]);}terms.push('r.'+orderParts[i][0]+(orderParts[i][1]==='desc'?'<':'>')+'?');args.push(cursor.values[i]);alternatives.push('('+terms.join(' AND ')+')');}where.push('('+alternatives.join(' OR ')+')');}
-  const selected=input.countsOnly==='1'?[]:db.prepare('SELECT r.* FROM records r WHERE '+where.join(' AND ')+' ORDER BY '+orderSQL+' LIMIT ?').all(...args,pageSize+1);
+  const selected=input.countsOnly==='1'?[]:prepare('SELECT r.* FROM records r WHERE '+where.join(' AND ')+' ORDER BY '+orderSQL+' LIMIT ?').all(...args,pageSize+1);
   const hasMore=selected.length>pageSize,rows=selected.slice(0,pageSize),last=rows.at(-1),stale=!!s.error||Date.now()-s.heartbeat>90000;
   const nextCursor=hasMore?encode({scope,generation:s.generation,revision:s.data_revision,offset:offset+rows.length,values:orderParts.map(([col])=>last[col])}):null;
-  const todayResult=db.prepare('SELECT count(*) AS n,coalesce(sum(r.amount),0) AS amount FROM records r WHERE '+completeWhere+' AND r.day=?').get(...completeArgs,dateFormatter.format(new Date()));
-  const result={todayCount:todayResult.n,todayAmount:todayResult.amount,ok:true,version:VERSION,total:totals.total,totalAmount:totals.totalAmount,pageSize,page:Math.floor(offset/pageSize)+1,offset,hasMore,nextCursor,counts:{all:counts.allCount,paidConfirmed:counts.paidConfirmed},generatedAt:s.read_time||new Date(s.heartbeat).toISOString(),stale,refreshFailed:!!s.error,refreshError:s.error||null,source:'durable-firestore-index',dateBasis:'normalized original dates; Asia/Seoul; end inclusive',metrics:{queryCount:0,sqlQueryCount:input.countsOnly==='1'?1:(!keyword&&!status&&sort!=='matchedOnly'?2:3),documentsRead:0,firestoreDocumentsRead:0,indexRowsReturned:rows.length,returnedDocuments:rows.length,databaseMs:Math.round(performance.now()-started)}};
+  const todayResult=prepare('SELECT count(*) AS n,coalesce(sum(r.amount),0) AS amount FROM records r WHERE '+completeWhere+' AND r.day=?').get(...completeArgs,dateFormatter.format(new Date()));
+  const result={todayCount:todayResult.n,todayAmount:todayResult.amount,ok:true,version:VERSION,total:totals.total,totalAmount:totals.totalAmount,pageSize,page:Math.floor(offset/pageSize)+1,offset,hasMore,nextCursor,counts:{all:counts.allCount,paidConfirmed:counts.paidConfirmed},generatedAt:s.read_time||new Date(s.heartbeat).toISOString(),realtimeStopped:stale,reconnectManualRequired:s.error==='INDEX_RECONNECT_WINDOW_EXPIRED',stale,refreshFailed:!!s.error,refreshError:s.error||null,source:'durable-firestore-index',dateBasis:'normalized original dates; Asia/Seoul; end inclusive',metrics:{queryCount:0,sqlQueryCount,documentsRead:0,firestoreDocumentsRead:0,indexRowsReturned:rows.length,pageRowsFetched:selected.length,returnedDocuments:rows.length,databaseMs:Math.round(performance.now()-started)}};
   if(kind==='naverOrders')result.orders=rows.map(row=>allowed(JSON.parse(row.payload),['id',...DISPLAY]));else result.estimates=rows.map(row=>JSON.parse(row.payload));
   return result;
  }
@@ -218,25 +221,30 @@ export async function openIndex(path,secret='isolated-test-key'){
    let s=state(kind);const now=Date.now();
    if(message.action==='lease'){
     if(!message.bootstrap&&db.prepare("SELECT 1 FROM source_state WHERE error='FIRESTORE_QUOTA' LIMIT 1").get())throw Object.assign(Error('FIRESTORE_QUOTA'),{status:503});
+    if(!message.bootstrap&&s?.error&&/RESET|BUDGET|MISMATCH|PARTIAL|WINDOW_EXPIRED/.test(s.error))throw Object.assign(Error(s.error),{status:409});
     if(s&&!s.ready&&!message.bootstrap)return {ok:true,bootstrapRequired:true};
     if(!s){if(!message.bootstrap) return {ok:true,bootstrapRequired:true};db.prepare('INSERT INTO source_state(kind,generation) VALUES(?,?)').run(kind,message.generation);s=state(kind);}
     if(s.lease_until>now&&s.owner!==message.owner)throw Object.assign(Error('INDEX_LEASE_BUSY'),{status:409});
     if(s.error==='FIRESTORE_QUOTA'&&!message.bootstrap)throw Object.assign(Error('FIRESTORE_QUOTA'),{status:503});
+    const disconnectedAt=s.disconnected_at||(s.ready?s.heartbeat:0);
+    if(!message.bootstrap&&disconnectedAt&&now-disconnectedAt>=1800000){db.prepare("UPDATE source_state SET error='INDEX_RECONNECT_WINDOW_EXPIRED',disconnected_at=? WHERE kind=?").run(disconnectedAt,kind);return {ok:true,state:state(kind),recordCount:db.prepare('SELECT count(*) AS n FROM records WHERE kind=?').get(kind).n};}
     db.prepare('UPDATE source_state SET owner=?,lease_until=? WHERE kind=?').run(message.owner,now+60000,kind);
-    return {ok:true,state:state(kind)};
+    return {ok:true,state:state(kind),recordCount:db.prepare('SELECT count(*) AS n FROM records WHERE kind=?').get(kind).n};
    }
-   if(!s||s.owner!==message.owner||s.lease_until<now)throw Object.assign(Error('INDEX_LEASE_LOST'),{status:409});
+   if(!s||s.owner!==message.owner||(s.lease_until<now&&message.action!=='error'))throw Object.assign(Error('INDEX_LEASE_LOST'),{status:409});
    if(message.action==='verify'){const actual=db.prepare('SELECT count(*) AS n FROM records WHERE kind=?').get(kind).n;if(actual!==message.expectedCount)throw Object.assign(Error('INDEX_EXISTENCE_FILTER_MISMATCH'),{status:409});return {ok:true};}
-   if(message.action==='error'){const code=String(message.error||'INDEX_SYNC_FAILED').slice(0,60);db.prepare('UPDATE source_state SET error=?,lease_until=? WHERE kind=?').run(code,now,kind);return {ok:true};}
+   if(message.action==='error'){const code=String(message.error||'INDEX_SYNC_FAILED').slice(0,60);db.prepare('UPDATE source_state SET error=?,lease_until=?,disconnected_at=CASE WHEN disconnected_at>0 THEN disconnected_at ELSE ? END,retry_attempt=? WHERE kind=?').run(code,now,Math.min(now,Number(message.disconnectedAt)||now),Math.max(0,Number(message.retryAttempt)||0),kind);return {ok:true};}
    if(message.action!=='apply')throw Error('INVALID_INDEX_ACTION');
    if(message.sequence<=s.sequence)return {ok:true,duplicate:true};if(message.sequence!==s.sequence+1)throw Object.assign(Error('INDEX_SEQUENCE_GAP'),{status:409});
    if(!Array.isArray(message.changes)||message.changes.length>100)throw Error('INVALID_INDEX_BATCH');
    const since=now-86400000;const recentReads=db.prepare('SELECT coalesce(sum(documents),0) AS n FROM read_ledger WHERE at>=?').get(since).n;if(recentReads+Number(message.documentsRead||0)>20000)throw Object.assign(Error('INDEX_DAILY_READ_BUDGET'),{status:429});
    for(const change of message.changes){if(change.deleted)db.prepare('DELETE FROM records WHERE kind=? AND id=?').run(kind,change.id);else upsert(kind,change.id,change.data);}
    db.prepare('UPDATE source_state SET sequence=?,token=coalesce(?,token),read_time=coalesce(?,read_time),ready=CASE WHEN ? THEN 1 ELSE ready END,error=CASE WHEN ? THEN NULL ELSE error END,heartbeat=CASE WHEN ? THEN ? ELSE heartbeat END,lease_until=?,data_revision=data_revision+?,documents_read=documents_read+?,bootstrap_after=coalesce(?,bootstrap_after),bootstrap_snapshot=coalesce(?,bootstrap_snapshot) WHERE kind=?').run(message.sequence,message.token||null,message.readTime||null,+!!message.current,+!!(message.current||message.readTime),+!!(message.current||message.readTime),now,now+60000,+!!message.changes.length,message.documentsRead||0,message.bootstrapAfter||null,message.bootstrapSnapshot?JSON.stringify(message.bootstrapSnapshot):null,kind);
+   if(message.current||message.readTime)db.prepare('UPDATE source_state SET disconnected_at=0,retry_attempt=0 WHERE kind=?').run(kind);
    if(message.documentsRead)db.prepare('INSERT INTO read_ledger(at,kind,path,documents) VALUES(?,?,?,?)').run(now,kind,message.bootstrap?'bootstrap':'change-stream',message.documentsRead);
    return {ok:true,sequence:message.sequence};
   });
  }
- return {db,state,query,mutate,close:()=>db.close(),diagnostic:()=>({ok:true,version:VERSION,sources:db.prepare('SELECT kind,ready,read_time,error,heartbeat,documents_read FROM source_state').all(),reads:db.prepare('SELECT kind,path,sum(documents) AS documents FROM read_ledger GROUP BY kind,path').all()})};
+ const snapshotQuery=(...args)=>{db.exec('BEGIN');try{const result=query(...args);db.exec('COMMIT');return result;}catch(e){db.exec('ROLLBACK');throw e;}};
+ return {db,state,query:snapshotQuery,mutate,close:()=>db.close(),diagnostic:()=>({ok:true,version:VERSION,sources:db.prepare('SELECT kind,ready,read_time,error,heartbeat,documents_read,disconnected_at,retry_attempt FROM source_state').all(),reads:db.prepare('SELECT kind,path,sum(documents) AS documents FROM read_ledger GROUP BY kind,path').all()})};
 }

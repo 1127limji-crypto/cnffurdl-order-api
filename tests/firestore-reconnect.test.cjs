@@ -1,0 +1,26 @@
+'use strict';
+const assert=require('node:assert/strict'),{Duplex}=require('node:stream'),{Recovery,WINDOW_MS}=require('../firestore-reconnect.cjs'),relay=require('../firestore-index-stream.cjs');
+const wait=async fn=>{for(let n=0;n<200;n++){if(fn())return;await new Promise(r=>setTimeout(r,5));}throw Error('WAIT_TIMEOUT');};
+(async()=>{
+ let now=1000;const policy=new Recovery(()=>now),failure=Object.assign(Error('INDEX_UNAVAILABLE'),{status:503});
+ assert.deepEqual([policy.failed(failure),policy.failed(failure),policy.failed(failure)],[2000,4000,8000]);assert.equal(policy.attempt,3);
+ policy.connected();assert.equal(policy.attempt,0);assert.equal(policy.since,0);assert.equal(policy.failed(failure),2000);
+ now+=WINDOW_MS;assert.equal(policy.failed(failure),null);assert.equal(policy.expired(),true);
+ const terminal=new Recovery();for(const message of ['INDEX_RESET_REQUIRES_CONTROLLED_REBUILD','INDEX_RECONNECT_READ_BUDGET_EXCEEDED'])assert.equal(terminal.failed(Error(message)),null);
+ assert.equal(terminal.failed(Object.assign(Error('quota'),{code:8})),null);
+ const {openIndex,SOURCE_FIELDS}=await import('../read-index-model.mjs');const db=await openIndex(':memory:');
+ const owner='seed';db.mutate('naverOrders',{action:'lease',bootstrap:true,owner,generation:'isolated'});db.mutate('naverOrders',{action:'apply',owner,sequence:1,changes:[{id:'fixture',data:{buyerName:'격리',amount:10}}],current:true,token:Buffer.from('saved').toString('base64'),readTime:new Date().toISOString()});db.mutate('naverOrders',{action:'error',owner,error:'INDEX_UNAVAILABLE'});
+ let calls=0,opens=0,stream,target;const request=async m=>{if(m.action==='lease'&&++calls<=4)throw failure;return db.mutate(m.kind,m);};
+ const clientFactory=()=>({listen(){opens++;stream=new Duplex({objectMode:true,read(){},write(v,e,cb){target=v;cb();}});return stream;},async close(){}});
+ await assert.rejects(relay.run('naverOrders',{indexRequest:request,clientFactory,fields:SOURCE_FIELDS.naverOrders,leaseRetryDelayMs:5}));
+ await wait(()=>opens===1);assert.equal(calls,5);assert.equal(target.addTarget.resumeToken.toString(),'saved');assert.equal(relay.status()[0].retryAttempt,4);assert.equal(relay.status()[0].reconnectReadLimit,101);
+ stream.push({targetChange:{targetChangeType:'CURRENT',resumeToken:Buffer.from('resumed'),readTime:{seconds:Math.floor(Date.now()/1000)}}});await wait(()=>relay.status()[0].state==='current');assert.equal(relay.status()[0].retryAttempt,0);assert.equal(db.state('naverOrders').retry_attempt,0);assert.equal(db.state('naverOrders').disconnected_at,0);
+ stream.emit('error',Object.assign(Error('temporary'),{code:14}));await wait(()=>opens===2);assert.equal(relay.status()[0].retryAttempt,1);assert.equal(target.addTarget.resumeToken.toString(),'resumed');
+ for(let n=0;n<102;n++)stream.push({documentChange:{document:{name:'projects/demo/databases/(default)/documents/naverOrders/'+n,fields:{amount:{integerValue:'1'}}}}});
+ await wait(()=>relay.status()[0].state==='stopped');assert.equal(relay.status()[0].error,'INDEX_RECONNECT_READ_BUDGET_EXCEEDED');assert.equal(relay.status()[0].documentsRead,101);assert.equal(relay.status()[0].manualRequired,true);await new Promise(r=>setTimeout(r,30));assert.equal(opens,2);
+ await relay.shutdown('naverOrders');
+ db.db.prepare("UPDATE source_state SET error=NULL,heartbeat=?,disconnected_at=?,lease_until=0 WHERE kind='naverOrders'").run(Date.now()-WINDOW_MS-1,Date.now()-WINDOW_MS-1);
+ await relay.run('naverOrders',{indexRequest:async m=>db.mutate(m.kind,m),clientFactory,fields:SOURCE_FIELDS.naverOrders});assert.equal(opens,2);assert.equal(relay.status()[0].error,'INDEX_RECONNECT_WINDOW_EXPIRED');assert.equal(db.state('naverOrders').error,'INDEX_RECONNECT_WINDOW_EXPIRED');assert.equal(db.query('naverOrders',{}).realtimeStopped,true);
+ await relay.shutdown('naverOrders');db.close();
+ console.log('PASS reconnect: 71 failures beyond three attempts, exponential delays, reset only after persisted CURRENT, next outage restarts at one, saved token, bounded catch-up, 30min persisted startup refusal, no quota/RESET retry');
+})().catch(e=>{console.error(e);process.exitCode=1});
