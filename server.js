@@ -3619,5 +3619,5 @@ const pmEstimateService = require('./pm-estimates.cjs')(app, { requireFirebaseAd
 app.post('/stored/admin/read-index/bootstrap', requireFirebaseAdmin, async (req,res) => {
   res.set('Cache-Control','private, no-store');
   try { const result=await require('./firestore-index-stream.cjs').bootstrap(String(req.body.kind||''),Number(req.body.maxReads));return res.status(202).json({ok:true,...result}); }
-  catch(e){return res.status(e.status||503).json({ok:false,code:e.message,retryable:false,operation:'index-bootstrap'});}
+  catch(e){readMetrics.block(e);return res.status(e.status>=500?424:e.status||424).json({ok:false,sourceStatus:e.status||503,code:readMetrics.quota(e)?'FIRESTORE_QUOTA':e.message,retryable:false,operation:'index-bootstrap'});}
 });

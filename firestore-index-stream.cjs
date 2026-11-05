@@ -16,7 +16,7 @@ async function run(kind,{bootstrap=false,maxReads=0,indexRequest=request,clientF
  const lease=await indexRequest({action:'lease',kind,owner,generation,bootstrap});
  if(lease.bootstrapRequired)return {kind,bootstrapRequired:true};
  const checkpoint=lease.state;
- if(!checkpoint.ready&&checkpoint.documents_read>0&&!checkpoint.token)throw Object.assign(Error('INDEX_PARTIAL_REBUILD_REQUIRED'),{status:409});
+ if(!checkpoint.ready&&checkpoint.documents_read>0)throw Object.assign(Error('INDEX_PARTIAL_REBUILD_REQUIRED'),{status:409});
  if(!checkpoint.token&&!bootstrap)return {kind,bootstrapRequired:true};
  if(!checkpoint.token&&!checkpoint.ready&&!maxReads)throw Error('BOOTSTRAP_READ_BUDGET_REQUIRED');
  const {v1}=require('@google-cloud/firestore');
@@ -43,7 +43,7 @@ async function run(kind,{bootstrap=false,maxReads=0,indexRequest=request,clientF
  stream=client.listen({retry:null,otherArgs:{headers:{'google-cloud-resource-prefix':database}}});
  const handle=async r=>{
   if(closed)return;
-  if(r.filter){await indexRequest({...meta,action:'verify',expectedCount:r.filter.count});return;}
+  if(r.filter){if(changes.length)await flush();await indexRequest({...meta,action:'verify',expectedCount:r.filter.count});return;}
   if(r.documentChange){
    if(bootstrap&&!current&&status.documentsRead>=maxReads)throw Error('BOOTSTRAP_READ_BUDGET_EXCEEDED');
    const document=r.documentChange.document,id=document.name.split('/').at(-1);
@@ -77,6 +77,7 @@ async function startFromCheckpoint(options={}){
 }
 async function bootstrap(kind,maxReads,options={}){
  if(!KINDS.includes(kind))throw Object.assign(Error('INVALID_SOURCE'),{status:400});
+ if(running.has(kind))return running.get(kind).status;
  if(bootstrapFlights.has(kind))return bootstrapFlights.get(kind);
  const flight=(async()=>{
   const {SOURCE_FIELDS}=await import('./read-index-model.mjs');
@@ -84,8 +85,7 @@ async function bootstrap(kind,maxReads,options={}){
   readMetrics.check();
   // Count preflight does not read source documents. Billing is recorded separately as index reads.
   const {Firestore}=require('@google-cloud/firestore'),db=new Firestore({...credentials(),preferRest:!process.env.FIRESTORE_EMULATOR_HOST});
-  const count=(await db.collection(kind).count().get()).data().count;
-  await db.terminate();if(count+100>maxReads)throw Object.assign(Error('BOOTSTRAP_EXCEEDS_READ_BUDGET'),{status:409});
+  let count;try{count=(await db.collection(kind).count().get()).data().count;}catch(e){readMetrics.block(e);throw e;}finally{await db.terminate();}if(count+100>maxReads)throw Object.assign(Error('BOOTSTRAP_EXCEEDS_READ_BUDGET'),{status:409});
   return run(kind,{...options,bootstrap:true,maxReads,fields:SOURCE_FIELDS[kind]});
  })();bootstrapFlights.set(kind,flight);try{return await flight;}finally{bootstrapFlights.delete(kind);}
 }

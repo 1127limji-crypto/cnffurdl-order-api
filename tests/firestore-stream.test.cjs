@@ -8,6 +8,7 @@ const wait=async fn=>{for(let n=0;n<100;n++){if(fn())return;await new Promise(r=
  const status=await relay.run('naverOrders',{bootstrap:true,maxReads:20,indexRequest,clientFactory,fields:SOURCE_FIELDS.naverOrders});
  assert.equal(request.addTarget.resumeToken,undefined);
  stream.push({documentChange:{document:{name:'projects/demo/databases/(default)/documents/naverOrders/fixture',fields:{buyerName:{stringValue:'김가나다'},productName:{stringValue:'테스트상품'},amount:{integerValue:'200'},paymentDate:{stringValue:'2026-11-05T00:00:00Z'},pdfBase64:{stringValue:'DO_NOT_COPY'}}}}});
+ stream.push({filter:{count:1}});
  stream.push({targetChange:{targetChangeType:'CURRENT',resumeToken:Buffer.from('test-token'),readTime:{seconds:1793836800,nanos:0}}});
  await wait(()=>status.state==='current');assert.equal(db.query('naverOrders',{keyword:'가나'}).total,1);assert.equal(db.query('naverOrders',{}).totalAmount,200);assert.equal(db.state('naverOrders').documents_read,1);assert.ok(!JSON.stringify(db.query('naverOrders',{})).includes('DO_NOT_COPY'));
  stream.push({documentChange:{document:{name:'projects/demo/databases/(default)/documents/naverOrders/fixture',fields:{buyerName:{stringValue:'수정이름'},amount:{integerValue:'300'},paymentDate:{stringValue:'2026-11-05T00:00:00Z'}}}}});
