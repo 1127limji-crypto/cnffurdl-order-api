@@ -2561,7 +2561,7 @@ app.get("/cafe24/oauth/callback", async (req, res) => {
     initFirebaseAdmin();
     const db = admin.firestore();
 
-    await cafe24PersistToken(db.collection(CAFE24_TOKEN_DOC_COLLECTION).doc(CAFE24_TOKEN_DOC_ID), c, {...token, scopes});
+    await cafe24PersistToken(db.collection(CAFE24_TOKEN_DOC_COLLECTION).doc(CAFE24_TOKEN_DOC_ID), c, {...token, scopes}, {mode:"oauth"});
 
     return res
       .status(200)
@@ -2618,29 +2618,14 @@ app.get("/cafe24/oauth/status", async (req, res) => {
     let tokenMeta = null;
 
     if (status.ready) {
-      initFirebaseAdmin();
-      const snap = await admin
-        .firestore()
-        .collection(CAFE24_TOKEN_DOC_COLLECTION)
-        .doc(CAFE24_TOKEN_DOC_ID)
-        .get();
+      const state = await cafe24LoadTokenState();
+      tokenStored = true;
+      const data = state.meta;
+      tokenMeta = {mallId:data.mallId||null,userId:null,shopNo:data.shopNo||null,scopes:data.scopes||[],expiresAt:data.expiresAt||null,refreshTokenExpiresAt:data.refreshTokenExpiresAt||null,store:"71-encrypted-vault"};
 
-      tokenStored = snap.exists;
-
-      if (snap.exists) {
-        const data = snap.data() || {};
-        tokenMeta = {
-          mallId: data.mallId || null,
-          userId: data.userId || null,
-          shopNo: data.shopNo || null,
-          scopes: data.scopes || [],
-          expiresAt: data.expiresAt || null,
-          refreshTokenExpiresAt: data.refreshTokenExpiresAt || null
-        };
-      }
     }
 
-    return res.json({
+    return res.set("Cache-Control","private, no-store").json({
       ok: true,
       cafe24OAuthGateway: "v1",
       configured: status,
@@ -2673,6 +2658,7 @@ app.get("/cafe24/oauth/status", async (req, res) => {
 
 let cafe24RefreshInFlight = null;
 const cafe24TokenCache = require("./cafe24-token-cache.cjs")();
+const cafe24Vault = require("./cafe24-token-vault.cjs")();
 const cafe24TokenCacheKey = c => crypto.createHash("sha256").update(JSON.stringify([c.mallId,c.clientId,c.tokenKey])).digest("hex");
 
 function cafe24DecryptJson(payload, rawKey) {
@@ -2711,43 +2697,38 @@ function cafe24ParseApiTime(value) {
   return Number.isFinite(ms) ? ms : 0;
 }
 
-async function cafe24LoadTokenState({probe=false}={}) {
-  const c = cafe24RequireConfig();
-
-  initFirebaseAdmin();
-  const db = admin.firestore();
-
-  const ref = db
-    .collection(CAFE24_TOKEN_DOC_COLLECTION)
-    .doc(CAFE24_TOKEN_DOC_ID);
-
-  return cafe24TokenCache.get(cafe24TokenCacheKey(c), async () => {
-  const snap = await ref.get();
-
-  if (!snap.exists) {
-    const error = new Error(
-      "Cafe24 OAuth 토큰이 저장되어 있지 않습니다. OAuth 승인을 먼저 진행해주세요."
-    );
-    error.code = "CAFE24_TOKEN_NOT_STORED";
-    throw error;
-  }
-
-  const meta = snap.data() || {};
-  const token = cafe24DecryptJson(meta.tokenCipher, c.tokenKey);
-
-  if (!token?.access_token || !token?.refresh_token) {
-    const error = new Error("Cafe24 저장 토큰이 불완전합니다.");
-    error.code = "CAFE24_TOKEN_INCOMPLETE";
-    throw error;
-  }
-
-  return { c, db, ref, meta, token };
-  },{probe});
+function cafe24VaultRecord(c, meta, issuedAtMs=Date.now()) {
+  return {v:1,context:cafe24TokenCacheKey(c),issuedAtMs,meta:{integration:"cafe24",mallId:meta.mallId||c.mallId,shopNo:meta.shopNo||null,scopes:meta.scopes||[],expiresAt:meta.expiresAt,refreshTokenExpiresAt:meta.refreshTokenExpiresAt,tokenCipher:meta.tokenCipher}};
+}
+function cafe24DecodeVault(c,ref,value) {
+  if(value?.record?.context!==cafe24TokenCacheKey(c)||value.record.meta?.mallId!==c.mallId)throw Object.assign(Error("Cafe24 인증 저장 범위 불일치"),{code:"CAFE24_TOKEN_VAULT_CONTEXT",httpStatus:503});
+  const meta=value.record.meta,token=cafe24DecryptJson(meta.tokenCipher,c.tokenKey);
+  if(!token?.access_token||!token?.refresh_token)throw Object.assign(Error("Cafe24 저장 토큰이 불완전합니다."),{code:"CAFE24_TOKEN_INCOMPLETE"});
+  return {c,db:admin.firestore(),ref,meta,token,revision:value.revision};
+}
+async function cafe24ReadFirestoreToken(c,ref) {
+  const snap=await ref.get();
+  if(!snap.exists)throw Object.assign(Error("Cafe24 OAuth 토큰이 저장되어 있지 않습니다."),{code:"CAFE24_TOKEN_NOT_STORED"});
+  const meta=snap.data()||{},token=cafe24DecryptJson(meta.tokenCipher,c.tokenKey);
+  if(!token?.access_token||!token?.refresh_token)throw Object.assign(Error("Cafe24 저장 토큰이 불완전합니다."),{code:"CAFE24_TOKEN_INCOMPLETE"});
+  return cafe24VaultRecord(c,meta,cafe24ParseApiTime(token.issued_at)||Date.now());
+}
+async function cafe24LoadTokenState({probe=false,fresh=false}={}) {
+  const c=cafe24RequireConfig();initFirebaseAdmin();
+  const ref=admin.firestore().collection(CAFE24_TOKEN_DOC_COLLECTION).doc(CAFE24_TOKEN_DOC_ID),key=cafe24TokenCacheKey(c);
+  return cafe24TokenCache.get(key,async()=>{
+    // Preserve the other work's explicit, single-document quota probe. It is
+    // never an automatic cold-start retry or a substitute for the primary vault.
+    const probed=probe?await cafe24ReadFirestoreToken(c,ref):null;
+    let {value}=await cafe24Vault({action:"get",key});
+    if(!value){const record=probed||await cafe24ReadFirestoreToken(c,ref);({value}=await cafe24Vault({action:"seed",key,record}));}
+    return cafe24DecodeVault(c,ref,value);
+  },{probe:probe||fresh});
 }
 
 require('./cafe24-token-recovery.cjs')(app,{requireFirebaseAdmin,loadTokenState:cafe24LoadTokenState,readMetrics});
 
-async function cafe24PersistToken(ref, c, token) {
+async function cafe24PersistToken(ref, c, token, {mode="refresh",expectedRevision,owner}={}) {
   const scopes = Array.isArray(token.scopes)
     ? token.scopes.map(String)
     : String(token.scope || "")
@@ -2778,8 +2759,14 @@ async function cafe24PersistToken(ref, c, token) {
       tokenCipher: encrypted,
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
   };
-  await ref.set(meta, {merge: true});
-  cafe24TokenCache.put(cafe24TokenCacheKey(c), {c, db:admin.firestore(), ref, meta, token:{...token, scopes}});
+  const record=cafe24VaultRecord(c,meta),key=cafe24TokenCacheKey(c);
+  const {value}=await cafe24Vault({action:"put",key,record,mode,expectedRevision,owner});
+  // The restart-safe primary is committed before publishing a rotated token.
+  // Keep the existing encrypted Firestore mirror; mirror errors are explicit,
+  // and cannot make us load an older mirror over the newer primary on restart.
+  try {await ref.set(meta,{merge:true});}
+  catch {console.warn("[cafe24 token store] CAFE24_FIRESTORE_MIRROR_WRITE_FAILED primary=71-encrypted-vault");}
+  cafe24TokenCache.put(key,cafe24DecodeVault(c,ref,value));
 
   return scopes;
 }
@@ -2790,8 +2777,9 @@ async function cafe24RefreshTokenNow() {
   }
 
   cafe24RefreshInFlight = (async () => {
-    const { c, ref, token } = await cafe24LoadTokenState();
-
+    const { c, ref, token, revision } = await cafe24LoadTokenState({fresh:true});
+    const key=cafe24TokenCacheKey(c),{owner}=await cafe24Vault({action:"lease",key,expectedRevision:revision});
+    try {
     const basicAuth = Buffer
       .from(`${c.clientId}:${c.clientSecret}`, "utf8")
       .toString("base64");
@@ -2808,7 +2796,8 @@ async function cafe24RefreshTokenNow() {
           "Authorization": `Basic ${basicAuth}`,
           "Content-Type": "application/x-www-form-urlencoded"
         },
-        body: form.toString()
+        body: form.toString(),
+        signal: AbortSignal.timeout(20000)
       }
     );
 
@@ -2842,12 +2831,13 @@ async function cafe24RefreshTokenNow() {
       throw error;
     }
 
-    await cafe24PersistToken(ref, c, next);
+    await cafe24PersistToken(ref, c, next, {expectedRevision:revision,owner});
 
     return {
       token: next,
       refreshed: true
     };
+    } finally {await cafe24Vault({action:"release",key,owner}).catch(()=>{});}
   })();
 
   try {
